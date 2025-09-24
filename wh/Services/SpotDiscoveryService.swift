@@ -69,6 +69,11 @@ class SpotDiscoveryService: ObservableObject {
         await updateDiscoveryState(isDiscovering: true, progress: "Checking existing spots...")
         
         do {
+            // Remove any existing duplicates before starting new discovery
+            await removeDuplicateSpots()
+            
+            // Clear existing spots cache for this new search to avoid mixing locations
+            existingSpotsCache = []
             // Cache existing spots to avoid redundant queries
             existingSpotsCache = await checkExistingSpots(near: location, radius: searchRadius)
             
@@ -117,13 +122,13 @@ class SpotDiscoveryService: ObservableObject {
             // Log context state
             logger.info("Context has \(allSpots.count) spots")
             
-            // Filter by proximity (< 100m) for efficient matching
+            // Filter by proximity within the search radius for proper location-based matching
             let nearbySpots = allSpots.filter { spot in
                 let spotLocation = CLLocation(latitude: spot.latitude, longitude: spot.longitude)
-                return location.distance(from: spotLocation) < 100.0
+                return location.distance(from: spotLocation) < radius
             }
             
-            logger.info("Found \(nearbySpots.count) existing spots within 100m proximity")
+            logger.info("Found \(nearbySpots.count) existing spots within \(radius)m radius")
             return nearbySpots
         } catch {
             logger.error("Failed to fetch existing spots: \(error.localizedDescription)")
@@ -794,6 +799,83 @@ class SpotDiscoveryService: ObservableObject {
             }
         } catch {
             logger.error("Failed to save spots to Core Data: \(error.localizedDescription)")
+        }
+    }
+    
+    /**
+     * Removes duplicate spots from the database
+     * This method should be called periodically to clean up duplicates
+     */
+    func removeDuplicateSpots() async {
+        let context = persistenceController.container.viewContext
+        let request: NSFetchRequest<Spot> = Spot.fetchRequest()
+        
+        do {
+            let allSpots = try context.fetch(request)
+            logger.info("Starting duplicate removal for \(allSpots.count) total spots")
+            
+            var duplicatesToDelete: [Spot] = []
+            var seenKeys: Set<String> = []
+            
+            // Sort spots by lastSeeded (keep the most recently updated ones)
+            let sortedSpots = allSpots.sorted { $0.lastSeeded > $1.lastSeeded }
+            
+            for spot in sortedSpots {
+                let compositeKey = "\(spot.name.lowercased().trimmingCharacters(in: .whitespacesAndNewlines))|\(spot.address.lowercased().trimmingCharacters(in: .whitespacesAndNewlines))"
+                
+                if seenKeys.contains(compositeKey) {
+                    // This is a duplicate, mark for deletion
+                    duplicatesToDelete.append(spot)
+                    logger.info("Marking duplicate for deletion: \(spot.name) at \(spot.address) (lastSeeded: \(spot.lastSeeded))")
+                } else {
+                    seenKeys.insert(compositeKey)
+                }
+            }
+            
+            // Also check for proximity duplicates (same location within 50m)
+            var proximityDuplicates: [Spot] = []
+            var processedSpots: [Spot] = []
+            
+            for spot in sortedSpots {
+                if duplicatesToDelete.contains(spot) { continue } // Skip already marked duplicates
+                
+                let spotLocation = CLLocation(latitude: spot.latitude, longitude: spot.longitude)
+                var isProximityDuplicate = false
+                
+                for processedSpot in processedSpots {
+                    let processedLocation = CLLocation(latitude: processedSpot.latitude, longitude: processedSpot.longitude)
+                    let distance = spotLocation.distance(from: processedLocation)
+                    
+                    if distance < 50.0 { // Within 50 meters
+                        proximityDuplicates.append(spot)
+                        logger.info("Marking proximity duplicate for deletion: \(spot.name) at \(spot.address) (distance: \(distance)m from \(processedSpot.name))")
+                        isProximityDuplicate = true
+                        break
+                    }
+                }
+                
+                if !isProximityDuplicate {
+                    processedSpots.append(spot)
+                }
+            }
+            
+            // Combine both types of duplicates
+            let allDuplicates = duplicatesToDelete + proximityDuplicates
+            
+            // Delete duplicates
+            for duplicate in allDuplicates {
+                context.delete(duplicate)
+            }
+            
+            if !allDuplicates.isEmpty {
+                try context.save()
+                logger.info("Removed \(allDuplicates.count) duplicate spots from database (\(duplicatesToDelete.count) exact duplicates, \(proximityDuplicates.count) proximity duplicates)")
+            } else {
+                logger.info("No duplicates found in database")
+            }
+            
+        } catch {
+            logger.error("Failed to remove duplicate spots: \(error.localizedDescription)")
         }
     }
     

@@ -526,7 +526,7 @@ struct SpotDetailView: View {
         }
         
         let photo = Photo(context: viewContext)
-        photo.imageData = imageData
+        photo.image = image
         photo.timestamp = Date()
         photo.spot = spot
         photo.cloudKitRecordID = ""
@@ -636,7 +636,7 @@ struct SpotDetailView_Previews: PreviewProvider {
         
         // Add a sample photo
         let samplePhoto = Photo(context: viewContext)
-        samplePhoto.imageData = Data()
+        samplePhoto.image = UIImage(systemName: "photo.fill")
         samplePhoto.timestamp = Date()
         samplePhoto.spot = sampleSpot
         samplePhoto.cloudKitRecordID = "sample-photo-id"

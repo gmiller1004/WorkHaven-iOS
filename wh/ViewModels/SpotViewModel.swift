@@ -72,6 +72,9 @@ class SpotViewModel: ObservableObject {
     func loadSpots(near: CLLocation?) async {
         logger.info("Loading spots near \(near?.coordinate.latitude ?? 0.0), \(near?.coordinate.longitude ?? 0.0)")
         
+        // Remove duplicates before loading spots
+        await spotDiscoveryService.removeDuplicateSpots()
+        
         // Debug: Check total spots in database
         debugSpotCount()
         
@@ -123,6 +126,16 @@ class SpotViewModel: ObservableObject {
         errorMessage = nil
         
         await discoverNewSpots(near: location)
+    }
+    
+    /**
+     * Clears spots when location changes to prevent mixing spots from different locations
+     */
+    func clearSpotsForLocationChange() {
+        spots = []
+        cachedSpots = []
+        lastCacheUpdate = nil
+        logger.info("Cleared spots for location change")
     }
     
     /**

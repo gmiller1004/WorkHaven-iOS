@@ -12,8 +12,9 @@ import OSLog
 
 /**
  * SpotListView displays a list of work spots with comprehensive information and ratings.
- * Features intelligent sorting, refresh capabilities, and accessibility support.
- * Uses SpotViewModel for data management and ThemeManager for consistent styling.
+ * Features intelligent sorting, refresh capabilities, navigation to SpotDetailView, and accessibility support.
+ * Uses @StateObject SpotViewModel for data management and @ObservedObject LocationService for user location.
+ * Implements ThemeManager for consistent styling with Avenir Next fonts and proper spacing.
  */
 struct SpotListView: View {
     
@@ -28,8 +29,8 @@ struct SpotListView: View {
     // MARK: - Initialization
     
     /**
-     * Initializes SpotListView with shared SpotViewModel
-     * - Parameter spotViewModel: The shared SpotViewModel instance from ContentView
+     * Initializes SpotListView with shared SpotViewModel instance
+     * Uses @ObservedObject for shared state management
      */
     init(spotViewModel: SpotViewModel) {
         self.spotViewModel = spotViewModel
@@ -45,7 +46,7 @@ struct SpotListView: View {
                     .ignoresSafeArea()
                 
                 if spotViewModel.isSeeding {
-                    // Progress view during loading
+                    // Progress view during loading with SpotDiscoveryService progress
                     VStack(spacing: ThemeManager.Spacing.md) {
                         ProgressView()
                             .scaleEffect(1.2)
@@ -113,7 +114,6 @@ struct SpotListView: View {
                         NavigationLink(destination: SpotDetailView(spot: spot, locationService: locationService)) {
                     SpotListRowView(spot: spot, userLocation: locationService.currentLocation)
                 }
-                .id("\(spot.objectID)-\(locationService.currentLocation?.coordinate.latitude ?? 0)-\(locationService.currentLocation?.coordinate.longitude ?? 0)")
                 .listRowBackground(ThemeManager.SwiftUIColors.latte)
                 .listRowSeparator(.hidden)
                 .listRowInsets(EdgeInsets(
@@ -175,16 +175,11 @@ struct SpotListView: View {
     
     /**
      * Loads spots if user location is available
+     * Note: ContentView handles initial spot loading with shared SpotViewModel
      */
     private func loadSpotsIfNeeded() {
-        guard let location = locationService.currentLocation else {
-            logger.info("No user location available, skipping spot loading")
-            return
-        }
-        
-        Task {
-            await spotViewModel.loadSpots(near: location)
-        }
+        // ContentView handles spot loading with the shared SpotViewModel
+        logger.info("SpotListView onAppear - spots will be loaded by ContentView")
     }
     
     /**
@@ -220,7 +215,8 @@ public struct SpotListRowView: View {
     }
     
     private var distance: Double {
-        let locationToUse = userLocation ?? CLLocation(latitude: 37.7749, longitude: -122.4194)
+        let fallbackLocation = CLLocation(latitude: 37.7749, longitude: -122.4194)
+        let locationToUse = userLocation ?? fallbackLocation
         
         if userLocation == nil {
             print("DEBUG: userLocation nil for spot \(spot.name), using fallback location")

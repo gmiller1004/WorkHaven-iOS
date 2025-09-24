@@ -21,7 +21,7 @@ extension Photo {
     }
 
     /// Binary data containing the image (JPEG format)
-    @NSManaged public var imageData: Data
+    @NSManaged public var imageData: Data?
     
     /// Timestamp when the photo was taken or added
     @NSManaged public var timestamp: Date

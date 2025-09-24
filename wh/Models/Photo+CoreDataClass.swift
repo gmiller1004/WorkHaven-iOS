@@ -23,13 +23,14 @@ public class Photo: NSManagedObject {
     /// Returns the UIImage representation of the stored image data
     public var image: UIImage? {
         get {
+            guard let imageData = imageData else { return nil }
             return UIImage(data: imageData)
         }
         set {
             if let newImage = newValue {
-                imageData = newImage.jpegData(compressionQuality: 0.8) ?? Data()
+                imageData = newImage.jpegData(compressionQuality: 0.8)
             } else {
-                imageData = Data()
+                imageData = nil
             }
         }
     }
@@ -44,6 +45,7 @@ public class Photo: NSManagedObject {
     
     /// Returns the file size of the image data in a human-readable format
     public var fileSizeString: String {
+        guard let imageData = imageData else { return "0 B" }
         let bytes = imageData.count
         
         if bytes < 1024 {
@@ -129,8 +131,8 @@ public class Photo: NSManagedObject {
     }
     
     private func validatePhoto() throws {
-        // Ensure image data is not empty
-        guard !imageData.isEmpty else {
+        // Ensure image data is not nil or empty
+        guard let imageData = imageData, !imageData.isEmpty else {
             throw NSError(domain: "PhotoValidation", code: 1001, userInfo: [NSLocalizedDescriptionKey: "Photo must have image data"])
         }
         
