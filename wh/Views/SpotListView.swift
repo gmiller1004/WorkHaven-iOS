@@ -110,16 +110,18 @@ struct SpotListView: View {
     private var spotsList: some View {
         List {
             ForEach(spotViewModel.spots, id: \.objectID) { spot in
-                SpotListRowView(spot: spot, userLocation: locationService.currentLocation)
-                    .id("\(spot.objectID)-\(locationService.currentLocation?.coordinate.latitude ?? 0)-\(locationService.currentLocation?.coordinate.longitude ?? 0)")
-                    .listRowBackground(ThemeManager.SwiftUIColors.latte)
-                    .listRowSeparator(.hidden)
-                    .listRowInsets(EdgeInsets(
-                        top: ThemeManager.Spacing.sm,
-                        leading: ThemeManager.Spacing.md,
-                        bottom: ThemeManager.Spacing.sm,
-                        trailing: ThemeManager.Spacing.md
-                    ))
+                NavigationLink(destination: SpotDetailView(spot: spot, userLocation: locationService.currentLocation)) {
+                    SpotListRowView(spot: spot, userLocation: locationService.currentLocation)
+                }
+                .id("\(spot.objectID)-\(locationService.currentLocation?.coordinate.latitude ?? 0)-\(locationService.currentLocation?.coordinate.longitude ?? 0)")
+                .listRowBackground(ThemeManager.SwiftUIColors.latte)
+                .listRowSeparator(.hidden)
+                .listRowInsets(EdgeInsets(
+                    top: ThemeManager.Spacing.sm,
+                    leading: ThemeManager.Spacing.md,
+                    bottom: ThemeManager.Spacing.sm,
+                    trailing: ThemeManager.Spacing.md
+                ))
             }
         }
         .listStyle(PlainListStyle())
