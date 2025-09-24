@@ -90,7 +90,6 @@ fastlane/test_output
 iOSInjectionProject/
 
 # API Keys and Secrets
-Info.plist
 wh/Secrets.xcconfig
 *.xcconfig
 
