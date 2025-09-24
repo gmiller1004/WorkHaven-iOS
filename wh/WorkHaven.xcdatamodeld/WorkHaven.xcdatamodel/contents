@@ -1,25 +1,25 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <model type="com.apple.IDECoreDataModeler.DataModel" documentVersion="1.0" lastSavedToolsVersion="22758" systemVersion="23F79" minimumToolsVersion="Automatic" sourceLanguage="Swift" userDefinedModelVersionIdentifier="">
         <entity name="Spot" representedClassName="Spot" syncable="YES">
-        <attribute name="name" optional="NO" attributeType="String"/>
-        <attribute name="address" optional="NO" attributeType="String"/>
+        <attribute name="name" optional="NO" attributeType="String" defaultValueString="Unknown Location"/>
+        <attribute name="address" optional="NO" attributeType="String" defaultValueString="Unknown Address"/>
         <attribute name="latitude" optional="NO" attributeType="Double" defaultValueString="0.0"/>
         <attribute name="longitude" optional="NO" attributeType="Double" defaultValueString="0.0"/>
         <attribute name="wifiRating" optional="NO" attributeType="Integer 16" defaultValueString="0"/>
-        <attribute name="noiseRating" optional="NO" attributeType="String"/>
+        <attribute name="noiseRating" optional="NO" attributeType="String" defaultValueString="Medium"/>
         <attribute name="outlets" optional="NO" attributeType="Boolean" defaultValueString="NO"/>
-        <attribute name="tips" optional="NO" attributeType="String"/>
+        <attribute name="tips" optional="NO" attributeType="String" defaultValueString="No tips available"/>
         <attribute name="photoURL" optional="YES" attributeType="String"/>
         <attribute name="lastModified" optional="NO" attributeType="Date" defaultValueString="0.0"/>
         <attribute name="lastSeeded" optional="NO" attributeType="Date" defaultValueString="0.0"/>
-        <attribute name="cloudKitRecordID" optional="NO" attributeType="String"/>
+        <attribute name="cloudKitRecordID" optional="NO" attributeType="String" defaultValueString=""/>
         <relationship name="userRatings" optional="YES" toMany="YES" deletionRule="Cascade" destinationEntity="UserRating" inverseName="spot" inverseEntity="UserRating"/>
     </entity>
         <entity name="UserRating" representedClassName="UserRating" syncable="YES">
         <attribute name="wifi" optional="NO" attributeType="Integer 16" defaultValueString="0"/>
-        <attribute name="noise" optional="NO" attributeType="String"/>
+        <attribute name="noise" optional="NO" attributeType="String" defaultValueString="Medium"/>
         <attribute name="plugs" optional="NO" attributeType="Boolean" defaultValueString="NO"/>
-        <attribute name="tip" optional="NO" attributeType="String"/>
+        <attribute name="tip" optional="NO" attributeType="String" defaultValueString="No tip provided"/>
         <relationship name="spot" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="Spot" inverseName="userRatings" inverseEntity="Spot"/>
     </entity>
     <elements>
