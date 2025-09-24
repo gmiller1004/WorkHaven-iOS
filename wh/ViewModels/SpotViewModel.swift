@@ -230,10 +230,27 @@ class SpotViewModel: ObservableObject {
         discoveryProgress = "Starting discovery..."
         
         logger.info("Starting spot discovery process")
-        let discoveredSpots = await spotDiscoveryService.discoverSpots(near: near, radius: searchRadius)
         
-        // Update progress from discovery service
-        discoveryProgress = spotDiscoveryService.discoveryProgress
+        // Start discovery and monitor progress
+        let discoveryTask = Task {
+            await spotDiscoveryService.discoverSpots(near: near, radius: searchRadius)
+        }
+        
+        // Monitor discovery progress
+        while !discoveryTask.isCancelled {
+            discoveryProgress = spotDiscoveryService.discoveryProgress
+            isSeeding = spotDiscoveryService.isDiscovering
+            
+            // If discovery is complete, break the loop
+            if !spotDiscoveryService.isDiscovering {
+                break
+            }
+            
+            // Small delay to avoid excessive updates
+            try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
+        }
+        
+        let discoveredSpots = await discoveryTask.value
         
         // Sort spots by distance and rating
         let sortedSpots = sortSpots(discoveredSpots, from: near)

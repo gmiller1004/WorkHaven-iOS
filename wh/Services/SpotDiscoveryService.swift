@@ -439,15 +439,30 @@ class SpotDiscoveryService: ObservableObject {
                 // Match batch data to map items by name
                 for mapItem in mapItems {
                     let name = mapItem.name ?? "Unknown Location"
+                    let address = mapItem.placemark.title ?? "Unknown Address"
+                    
+                    // Try exact match first
                     if let spotData = batchData.first(where: { $0.name.lowercased() == name.lowercased() }) {
                         let spot = createSpotFromMapItem(mapItem: mapItem, batchData: spotData)
                         spots.append(spot)
-                        logger.debug("Enriched spot: \(name) - WiFi: \(spotData.wifi), Noise: \(spotData.noise)")
+                        logger.debug("Enriched spot (exact match): \(name) - WiFi: \(spotData.wifi), Noise: \(spotData.noise)")
                     } else {
-                        logger.warning("No Grok data found for \(name), using defaults")
-                        // Fallback to default if no match found
-                        let defaultSpot = try await createSpotWithDefaults(mapItem: mapItem)
-                        spots.append(defaultSpot)
+                        // Try partial match - Grok API includes full address in name
+                        if let spotData = batchData.first(where: { grokName in
+                            // Check if Grok name contains our venue name
+                            grokName.name.lowercased().contains(name.lowercased()) ||
+                            // Or if our venue name contains the first part of Grok name
+                            name.lowercased().contains(grokName.name.components(separatedBy: " at ").first?.lowercased() ?? "")
+                        }) {
+                            let spot = createSpotFromMapItem(mapItem: mapItem, batchData: spotData)
+                            spots.append(spot)
+                            logger.debug("Enriched spot (partial match): \(name) - WiFi: \(spotData.wifi), Noise: \(spotData.noise)")
+                        } else {
+                            logger.warning("No Grok data found for \(name), using defaults")
+                            // Fallback to default if no match found
+                            let defaultSpot = try await createSpotWithDefaults(mapItem: mapItem)
+                            spots.append(defaultSpot)
+                        }
                     }
                 }
             } catch {
