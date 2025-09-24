@@ -420,7 +420,12 @@ class SpotDiscoveryService: ObservableObject {
             return apiKey
         }
         
+        // For development: Use placeholder (replace with actual key for testing)
+        #if DEBUG
+        return "YOUR_GROK_API_KEY_HERE"
+        #else
         return nil
+        #endif
     }
     
     /**
