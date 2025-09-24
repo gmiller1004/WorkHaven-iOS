@@ -110,7 +110,7 @@ struct SpotListView: View {
     private var spotsList: some View {
         List {
             ForEach(spotViewModel.spots, id: \.objectID) { spot in
-                NavigationLink(destination: SpotDetailView(spot: spot, userLocation: locationService.currentLocation)) {
+                        NavigationLink(destination: SpotDetailView(spot: spot, locationService: locationService)) {
                     SpotListRowView(spot: spot, userLocation: locationService.currentLocation)
                 }
                 .id("\(spot.objectID)-\(locationService.currentLocation?.coordinate.latitude ?? 0)-\(locationService.currentLocation?.coordinate.longitude ?? 0)")

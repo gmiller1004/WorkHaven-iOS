@@ -10,431 +10,349 @@ import SwiftUI
 import MapKit
 import CoreLocation
 import OSLog
+import PhotosUI
 
 /**
  * SpotDetailView displays comprehensive information about a selected work spot
- * including location details, amenities, user ratings, and interactive features
+ * including location details, amenities, user ratings, photo gallery, and interactive features
  */
 struct SpotDetailView: View {
-    
-    // MARK: - Properties
-    
-    let spot: Spot
-    let userLocation: CLLocation?
+    @Environment(\.managedObjectContext) private var viewContext
+    @Environment(\.dismiss) var dismiss
+    @ObservedObject var spot: Spot
+    @ObservedObject var locationService: LocationService
     
     @State private var showingMap = false
-    @State private var showingRatingSheet = false
-    @State private var showingShareSheet = false
-    @State private var showingDirections = false
+    @State private var showingImagePicker = false
+    @State private var showingRatingForm = false
+    @State private var showingError = false
+    @State private var errorMessage = ""
+    
+    // User rating form state
+    @State private var wifiRating: Double = 3.0
+    @State private var noiseLevel = "Medium"
+    @State private var outletsAvailable = true
+    @State private var userTip = ""
+    
+    // Photo picker state
+    @State private var selectedImage: UIImage?
     
     private let logger = Logger(subsystem: "com.nextsizzle.wh", category: "SpotDetailView")
     
-    // MARK: - Computed Properties
-    
-    private var distance: String {
-        guard let userLocation = userLocation else {
-            return "Distance unknown"
-        }
-        
-        let spotLocation = CLLocation(latitude: spot.latitude, longitude: spot.longitude)
-        let distanceInMiles = userLocation.distance(from: spotLocation) / 1609.34 // Convert meters to miles
-        
-        if distanceInMiles < 0.1 {
-            return "Less than 0.1 miles"
-        } else {
-            return String(format: "%.1f miles", distanceInMiles)
-        }
-    }
-    
-    private var overallRating: Double {
-        // Calculate overall rating (50% aggregate + 50% user ratings)
-        let aggregateRating = calculateAggregateRating()
-        let userRatingAverage = calculateUserRatingAverage()
-        
-        if userRatingAverage > 0 {
-            return (aggregateRating * 0.5) + (userRatingAverage * 0.5)
-        } else {
-            return aggregateRating
-        }
-    }
-    
-    // MARK: - Initialization
-    
-    init(spot: Spot, userLocation: CLLocation? = nil) {
-        self.spot = spot
-        self.userLocation = userLocation
-    }
-    
-    // MARK: - Body
-    
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: ThemeManager.Spacing.medium) {
-                
-                // Header Section
-                headerSection
-                
-                // Rating Section
-                ratingSection
-                
-                // Location Section
-                locationSection
-                
-                // Amenities Section
-                amenitiesSection
-                
-                // Tips Section
-                tipsSection
-                
-                // User Ratings Section
-                userRatingsSection
-                
-                // Action Buttons
-                actionButtonsSection
-                
-                Spacer(minLength: 100) // Bottom padding for tab bar
+        NavigationView {
+            ScrollView {
+                VStack(alignment: .leading, spacing: ThemeManager.Spacing.md) {
+                    headerSection
+                    mapPreviewSection
+                    directionsSection
+                    ratingsSection
+                    userRatingFormSection
+                    tipsSection
+                    photoGallerySection
+                }
+                .padding()
             }
-            .padding(ThemeManager.Spacing.medium)
-        }
-        .navigationTitle(spot.name)
-        .navigationBarTitleDisplayMode(.large)
-        .background(ThemeManager.SwiftUIColors.latte)
-        .sheet(isPresented: $showingMap) {
-            mapView
-        }
-        .sheet(isPresented: $showingRatingSheet) {
-            ratingSheet
-        }
-        .sheet(isPresented: $showingShareSheet) {
-            shareSheet
+            .navigationTitle(spot.name)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Done") {
+                        dismiss()
+                    }
+                    .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+                }
+            }
+            .background(ThemeManager.SwiftUIColors.latte)
+            .sheet(isPresented: $showingMap) {
+                mapView
+            }
+            .sheet(isPresented: $showingImagePicker) {
+                imagePickerView
+            }
+            .sheet(isPresented: $showingRatingForm) {
+                ratingFormView
+            }
+            .alert("Error", isPresented: $showingError) {
+                Button("OK") { }
+            } message: {
+                Text(errorMessage)
+            }
         }
     }
     
     // MARK: - Header Section
     
     private var headerSection: some View {
-        VStack(alignment: .leading, spacing: ThemeManager.Spacing.small) {
+        VStack(alignment: .leading, spacing: ThemeManager.Spacing.sm) {
             Text(spot.name)
                 .font(ThemeManager.SwiftUIFonts.title)
+                .fontWeight(.bold)
                 .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+                .accessibilityLabel("Spot name: \(spot.name)")
             
             Text(spot.address)
                 .font(ThemeManager.SwiftUIFonts.body)
-                .foregroundColor(ThemeManager.SwiftUIColors.mocha.opacity(0.7))
+                .foregroundColor(.gray)
+                .accessibilityLabel("Address: \(spot.address)")
             
             HStack {
                 Image(systemName: "location.fill")
                     .foregroundColor(ThemeManager.SwiftUIColors.coral)
-                
-                Text(distance)
+                    .accessibilityHidden(true)
+                Text(distanceString)
                     .font(ThemeManager.SwiftUIFonts.caption)
-                    .foregroundColor(ThemeManager.SwiftUIColors.mocha.opacity(0.8))
+                    .foregroundColor(ThemeManager.SwiftUIColors.coral)
+                    .accessibilityLabel("Distance: \(distanceString)")
             }
         }
-        .padding(ThemeManager.Spacing.medium)
-        .background(ThemeManager.SwiftUIColors.latte)
-        .cornerRadius(ThemeManager.CornerRadius.medium)
-        .overlay(
-            RoundedRectangle(cornerRadius: ThemeManager.CornerRadius.medium)
-                .stroke(ThemeManager.SwiftUIColors.mocha.opacity(0.2), lineWidth: 1)
-        )
     }
     
-    // MARK: - Rating Section
+    // MARK: - Map Preview Section
     
-    private var ratingSection: some View {
-        VStack(alignment: .leading, spacing: ThemeManager.Spacing.small) {
-            HStack {
-                Text("Overall Rating")
-                    .font(ThemeManager.SwiftUIFonts.headline)
-                    .foregroundColor(ThemeManager.SwiftUIColors.mocha)
-                
-                Spacer()
-                
-                HStack(spacing: 4) {
-                    ForEach(0..<5) { index in
-                        Image(systemName: index < Int(overallRating) ? "star.fill" : "star")
-                            .foregroundColor(ThemeManager.SwiftUIColors.coral)
-                            .font(.system(size: 16))
-                    }
-                }
-                
-                Text(String(format: "%.1f", overallRating))
-                    .font(ThemeManager.SwiftUIFonts.headline)
-                    .foregroundColor(ThemeManager.SwiftUIColors.mocha)
-            }
-            
-            if let userRatings = spot.userRatings?.allObjects as? [UserRating], !userRatings.isEmpty {
-                Text("Based on \(userRatings.count) user rating\(userRatings.count == 1 ? "" : "s")")
-                    .font(ThemeManager.SwiftUIFonts.caption)
-                    .foregroundColor(ThemeManager.SwiftUIColors.mocha.opacity(0.7))
-            } else {
-                Text("Based on aggregate data")
-                    .font(ThemeManager.SwiftUIFonts.caption)
-                    .foregroundColor(ThemeManager.SwiftUIColors.mocha.opacity(0.7))
-            }
-        }
-        .padding(ThemeManager.Spacing.medium)
-        .background(ThemeManager.SwiftUIColors.latte)
-        .cornerRadius(ThemeManager.CornerRadius.medium)
-        .overlay(
-            RoundedRectangle(cornerRadius: ThemeManager.CornerRadius.medium)
-                .stroke(ThemeManager.SwiftUIColors.mocha.opacity(0.2), lineWidth: 1)
-        )
-    }
-    
-    // MARK: - Location Section
-    
-    private var locationSection: some View {
-        VStack(alignment: .leading, spacing: ThemeManager.Spacing.small) {
+    private var mapPreviewSection: some View {
+        VStack(alignment: .leading, spacing: ThemeManager.Spacing.sm) {
             Text("Location")
                 .font(ThemeManager.SwiftUIFonts.headline)
                 .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+                .accessibilityAddTraits(.isHeader)
             
-            Text(spot.address)
-                .font(ThemeManager.SwiftUIFonts.body)
-                .foregroundColor(ThemeManager.SwiftUIColors.mocha.opacity(0.8))
+            Button(action: { showingMap = true }) {
+                Map(coordinateRegion: .constant(MKCoordinateRegion(
+                    center: CLLocationCoordinate2D(latitude: spot.latitude, longitude: spot.longitude),
+                    span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
+                )), annotationItems: [MapAnnotationItem(coordinate: CLLocationCoordinate2D(latitude: spot.latitude, longitude: spot.longitude), title: spot.name)]) { item in
+                    MapAnnotation(coordinate: item.coordinate) {
+                        VStack {
+                            Image(systemName: "mappin.circle.fill")
+                                .foregroundColor(ThemeManager.SwiftUIColors.coral)
+                                .font(.title)
+                            Text(item.title)
+                                .font(.caption)
+                                .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+                                .padding(.horizontal, 4)
+                                .background(ThemeManager.SwiftUIColors.latte)
+                                .cornerRadius(4)
+                        }
+                    }
+                }
+                .frame(height: 200)
+                .cornerRadius(12)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12)
+                        .stroke(ThemeManager.SwiftUIColors.mocha.opacity(0.2), lineWidth: 1)
+                )
+            }
+            .buttonStyle(PlainButtonStyle())
+            .accessibilityLabel("Map preview for \(spot.name)")
+        }
+    }
+    
+    // MARK: - Directions Section
+    
+    private var directionsSection: some View {
+        VStack(alignment: .leading, spacing: ThemeManager.Spacing.sm) {
+            Button("Get Directions") {
+                openDirections()
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(ThemeManager.SwiftUIColors.mocha)
+            .foregroundColor(ThemeManager.SwiftUIColors.latte)
+            .accessibilityLabel("Get directions to \(spot.name)")
+        }
+    }
+    
+    // MARK: - Ratings Section
+    
+    private var ratingsSection: some View {
+        VStack(alignment: .leading, spacing: ThemeManager.Spacing.sm) {
+            Text("Ratings")
+                .font(ThemeManager.SwiftUIFonts.headline)
+                .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+                .accessibilityAddTraits(.isHeader)
             
-            Button(action: {
-                showingMap = true
-            }) {
+            VStack(alignment: .leading, spacing: ThemeManager.Spacing.sm) {
+                // WiFi Rating
                 HStack {
-                    Image(systemName: "map.fill")
+                    Image(systemName: "wifi")
                         .foregroundColor(ThemeManager.SwiftUIColors.coral)
-                    
-                    Text("View on Map")
+                        .accessibilityHidden(true)
+                    Text("WiFi:")
                         .font(ThemeManager.SwiftUIFonts.body)
+                        .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+                    HStack(spacing: 2) {
+                        ForEach(0..<5) { index in
+                            Image(systemName: index < Int(spot.wifiRating) ? "signal.3" : "signal.3")
+                                .foregroundColor(index < Int(spot.wifiRating) ? ThemeManager.SwiftUIColors.coral : .gray)
+                        }
+                    }
+                    .accessibilityLabel("WiFi rating: \(spot.wifiRating) out of 5")
+                }
+                
+                // Noise Rating
+                HStack {
+                    Image(systemName: "speaker.wave.2.fill")
                         .foregroundColor(ThemeManager.SwiftUIColors.coral)
+                        .accessibilityHidden(true)
+                    Text("Noise:")
+                        .font(ThemeManager.SwiftUIFonts.body)
+                        .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+                    Text(spot.noiseRating)
+                        .font(ThemeManager.SwiftUIFonts.body)
+                        .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+                        .accessibilityLabel("Noise level: \(spot.noiseRating)")
+                }
+                
+                // Outlets
+                HStack {
+                    Image(systemName: "powerplug.fill")
+                        .foregroundColor(ThemeManager.SwiftUIColors.coral)
+                        .accessibilityHidden(true)
+                    Text("Outlets:")
+                        .font(ThemeManager.SwiftUIFonts.body)
+                        .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+                    Text(spot.outlets ? "Available" : "Not Available")
+                        .font(ThemeManager.SwiftUIFonts.body)
+                        .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+                        .accessibilityLabel("Outlets: \(spot.outlets ? "Available" : "Not Available")")
+                }
+                
+                // Overall Rating
+                HStack {
+                    Text("Overall:")
+                        .font(ThemeManager.SwiftUIFonts.body)
+                        .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+                    HStack(spacing: 2) {
+                        ForEach(0..<5) { index in
+                            Image(systemName: index < Int(overallRating) ? "star.fill" : "star")
+                                .foregroundColor(ThemeManager.SwiftUIColors.coral)
+                        }
+                    }
+                    Text(String(format: "%.1f", overallRating))
+                        .font(ThemeManager.SwiftUIFonts.body)
+                        .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+                        .accessibilityLabel("Overall rating: \(String(format: "%.1f", overallRating)) out of 5 stars")
                 }
             }
         }
-        .padding(ThemeManager.Spacing.medium)
-        .background(ThemeManager.SwiftUIColors.latte)
-        .cornerRadius(ThemeManager.CornerRadius.medium)
-        .overlay(
-            RoundedRectangle(cornerRadius: ThemeManager.CornerRadius.medium)
-                .stroke(ThemeManager.SwiftUIColors.mocha.opacity(0.2), lineWidth: 1)
-        )
     }
     
-    // MARK: - Amenities Section
+    // MARK: - User Rating Form Section
     
-    private var amenitiesSection: some View {
-        VStack(alignment: .leading, spacing: ThemeManager.Spacing.small) {
-            Text("Amenities")
-                .font(ThemeManager.SwiftUIFonts.headline)
-                .foregroundColor(ThemeManager.SwiftUIColors.mocha)
-            
-            VStack(spacing: ThemeManager.Spacing.small) {
-                amenityRow(
-                    icon: "wifi",
-                    title: "WiFi Quality",
-                    rating: Int(spot.wifiRating),
-                    color: ThemeManager.SwiftUIColors.coral
-                )
+    private var userRatingFormSection: some View {
+        VStack(alignment: .leading, spacing: ThemeManager.Spacing.sm) {
+            HStack {
+                Text("Rate This Spot")
+                    .font(ThemeManager.SwiftUIFonts.headline)
+                    .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+                    .accessibilityAddTraits(.isHeader)
                 
-                amenityRow(
-                    icon: "speaker.wave.2",
-                    title: "Noise Level",
-                    value: spot.noiseRating,
-                    color: noiseColor(spot.noiseRating)
-                )
+                Spacer()
                 
-                amenityRow(
-                    icon: "powerplug",
-                    title: "Power Outlets",
-                    value: spot.outlets ? "Available" : "Not Available",
-                    color: spot.outlets ? .green : .red
-                )
+                Button("Add Rating") {
+                    showingRatingForm = true
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(ThemeManager.SwiftUIColors.mocha)
+                .foregroundColor(ThemeManager.SwiftUIColors.latte)
+                .accessibilityLabel("Add rating button")
             }
         }
-        .padding(ThemeManager.Spacing.medium)
-        .background(ThemeManager.SwiftUIColors.latte)
-        .cornerRadius(ThemeManager.CornerRadius.medium)
-        .overlay(
-            RoundedRectangle(cornerRadius: ThemeManager.CornerRadius.medium)
-                .stroke(ThemeManager.SwiftUIColors.mocha.opacity(0.2), lineWidth: 1)
-        )
     }
     
     // MARK: - Tips Section
     
     private var tipsSection: some View {
-        VStack(alignment: .leading, spacing: ThemeManager.Spacing.small) {
+        VStack(alignment: .leading, spacing: ThemeManager.Spacing.sm) {
             Text("Tips & Insights")
                 .font(ThemeManager.SwiftUIFonts.headline)
                 .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+                .accessibilityAddTraits(.isHeader)
             
             Text(spot.tips)
                 .font(ThemeManager.SwiftUIFonts.body)
-                .foregroundColor(ThemeManager.SwiftUIColors.mocha.opacity(0.8))
-                .fixedSize(horizontal: false, vertical: true)
+                .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+                .padding()
+                .background(ThemeManager.SwiftUIColors.latte)
+                .cornerRadius(8)
+                .accessibilityLabel("Tips: \(spot.tips)")
         }
-        .padding(ThemeManager.Spacing.medium)
-        .background(ThemeManager.SwiftUIColors.latte)
-        .cornerRadius(ThemeManager.CornerRadius.medium)
-        .overlay(
-            RoundedRectangle(cornerRadius: ThemeManager.CornerRadius.medium)
-                .stroke(ThemeManager.SwiftUIColors.mocha.opacity(0.2), lineWidth: 1)
-        )
     }
     
-    // MARK: - User Ratings Section
+    // MARK: - Photo Gallery Section
     
-    private var userRatingsSection: some View {
-        VStack(alignment: .leading, spacing: ThemeManager.Spacing.small) {
+    private var photoGallerySection: some View {
+        VStack(alignment: .leading, spacing: ThemeManager.Spacing.sm) {
             HStack {
-                Text("User Reviews")
+                Text("Photos")
                     .font(ThemeManager.SwiftUIFonts.headline)
                     .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+                    .accessibilityAddTraits(.isHeader)
                 
                 Spacer()
                 
-                Button("Add Review") {
-                    showingRatingSheet = true
+                Button("Upload Photo") {
+                    showingImagePicker = true
                 }
-                .font(ThemeManager.SwiftUIFonts.caption)
-                .foregroundColor(ThemeManager.SwiftUIColors.coral)
+                .buttonStyle(.borderedProminent)
+                .tint(ThemeManager.SwiftUIColors.mocha)
+                .foregroundColor(ThemeManager.SwiftUIColors.latte)
+                .accessibilityLabel("Upload photo button")
             }
             
-            if let userRatings = spot.userRatings?.allObjects as? [UserRating], !userRatings.isEmpty {
-                ForEach(userRatings, id: \.objectID) { rating in
-                    userRatingRow(rating)
+            if let photos = spot.photos as? Set<Photo>, !photos.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: ThemeManager.Spacing.sm) {
+                        ForEach(Array(photos).sorted(by: { $0.timestamp > $1.timestamp }), id: \.objectID) { photo in
+                            if let image = photo.image {
+                                Image(uiImage: image)
+                                    .resizable()
+                                    .aspectRatio(contentMode: .fill)
+                                    .frame(width: 120, height: 120)
+                                    .clipped()
+                                    .cornerRadius(8)
+                                    .accessibilityLabel("Photo taken on \(photo.formattedTimestamp)")
+                            }
+                        }
+                    }
+                    .padding(.horizontal)
                 }
             } else {
-                Text("No user reviews yet. Be the first to review!")
+                Text("No photos yet. Be the first to add one!")
                     .font(ThemeManager.SwiftUIFonts.body)
-                    .foregroundColor(ThemeManager.SwiftUIColors.mocha.opacity(0.6))
+                    .foregroundColor(ThemeManager.SwiftUIColors.mocha)
                     .italic()
-            }
-        }
-        .padding(ThemeManager.Spacing.medium)
-        .background(ThemeManager.SwiftUIColors.latte)
-        .cornerRadius(ThemeManager.CornerRadius.medium)
-        .overlay(
-            RoundedRectangle(cornerRadius: ThemeManager.CornerRadius.medium)
-                .stroke(ThemeManager.SwiftUIColors.mocha.opacity(0.2), lineWidth: 1)
-        )
-    }
-    
-    // MARK: - Action Buttons Section
-    
-    private var actionButtonsSection: some View {
-        VStack(spacing: ThemeManager.Spacing.small) {
-            Button(action: {
-                showingDirections = true
-            }) {
-                HStack {
-                    Image(systemName: "location.fill")
-                    Text("Get Directions")
-                }
-                .frame(maxWidth: .infinity)
-                .padding(ThemeManager.Spacing.medium)
-                .background(ThemeManager.SwiftUIColors.coral)
-                .foregroundColor(.white)
-                .cornerRadius(ThemeManager.CornerRadius.medium)
-            }
-            
-            HStack(spacing: ThemeManager.Spacing.small) {
-                Button(action: {
-                    showingShareSheet = true
-                }) {
-                    HStack {
-                        Image(systemName: "square.and.arrow.up")
-                        Text("Share")
-                    }
+                    .padding()
                     .frame(maxWidth: .infinity)
-                    .padding(ThemeManager.Spacing.medium)
-                    .background(ThemeManager.SwiftUIColors.mocha.opacity(0.1))
-                    .foregroundColor(ThemeManager.SwiftUIColors.mocha)
-                    .cornerRadius(ThemeManager.CornerRadius.medium)
-                }
-                
-                Button(action: {
-                    showingRatingSheet = true
-                }) {
-                    HStack {
-                        Image(systemName: "star.fill")
-                        Text("Rate")
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(ThemeManager.Spacing.medium)
-                    .background(ThemeManager.SwiftUIColors.mocha.opacity(0.1))
-                    .foregroundColor(ThemeManager.SwiftUIColors.mocha)
-                    .cornerRadius(ThemeManager.CornerRadius.medium)
-                }
+                    .background(ThemeManager.SwiftUIColors.latte)
+                    .cornerRadius(8)
+                    .accessibilityLabel("No photos available")
             }
         }
-    }
-    
-    // MARK: - Helper Views
-    
-    private func amenityRow(icon: String, title: String, rating: Int? = nil, value: String? = nil, color: Color) -> some View {
-        HStack {
-            Image(systemName: icon)
-                .foregroundColor(color)
-                .frame(width: 20)
-            
-            Text(title)
-                .font(ThemeManager.SwiftUIFonts.body)
-                .foregroundColor(ThemeManager.SwiftUIColors.mocha)
-            
-            Spacer()
-            
-            if let rating = rating {
-                HStack(spacing: 2) {
-                    ForEach(0..<5) { index in
-                        Image(systemName: index < rating ? "star.fill" : "star")
-                            .foregroundColor(color)
-                            .font(.system(size: 12))
-                    }
-                }
-            } else if let value = value {
-                Text(value)
-                    .font(ThemeManager.SwiftUIFonts.body)
-                    .foregroundColor(color)
-            }
-        }
-    }
-    
-    private func userRatingRow(_ rating: UserRating) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                HStack(spacing: 2) {
-                    ForEach(0..<5) { index in
-                        Image(systemName: index < Int(rating.wifi) ? "star.fill" : "star")
-                            .foregroundColor(ThemeManager.SwiftUIColors.coral)
-                            .font(.system(size: 12))
-                    }
-                }
-                
-                Spacer()
-                
-                Text("WiFi: \(Int(rating.wifi))/5")
-                    .font(ThemeManager.SwiftUIFonts.caption)
-                    .foregroundColor(ThemeManager.SwiftUIColors.mocha.opacity(0.7))
-            }
-            
-            if !rating.tip.isEmpty {
-                Text(rating.tip)
-                    .font(ThemeManager.SwiftUIFonts.caption)
-                    .foregroundColor(ThemeManager.SwiftUIColors.mocha.opacity(0.8))
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-        .padding(ThemeManager.Spacing.small)
-        .background(ThemeManager.SwiftUIColors.mocha.opacity(0.05))
-        .cornerRadius(ThemeManager.CornerRadius.small)
     }
     
     // MARK: - Sheet Views
     
     private var mapView: some View {
         NavigationView {
-            Map {
-                Marker(spot.name, coordinate: CLLocationCoordinate2D(latitude: spot.latitude, longitude: spot.longitude))
+            Map(coordinateRegion: .constant(MKCoordinateRegion(
+                center: CLLocationCoordinate2D(latitude: spot.latitude, longitude: spot.longitude),
+                span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
+            )), annotationItems: [MapAnnotationItem(coordinate: CLLocationCoordinate2D(latitude: spot.latitude, longitude: spot.longitude), title: spot.name)]) { item in
+                MapAnnotation(coordinate: item.coordinate) {
+                    VStack {
+                        Image(systemName: "mappin.circle.fill")
+                            .foregroundColor(ThemeManager.SwiftUIColors.coral)
+                            .font(.title)
+                        Text(item.title)
+                            .font(.caption)
+                            .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+                            .padding(.horizontal, 4)
+                            .background(ThemeManager.SwiftUIColors.latte)
+                            .cornerRadius(4)
+                    }
+                }
             }
-            .mapStyle(.standard)
             .navigationTitle(spot.name)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -447,72 +365,285 @@ struct SpotDetailView: View {
         }
     }
     
-    private var ratingSheet: some View {
-        // TODO: Implement rating sheet
-        Text("Rating functionality coming soon!")
-            .padding()
+    private var imagePickerView: some View {
+        ImagePicker(selectedImage: $selectedImage, allowsEditing: true) { image in
+            savePhoto(image)
+        }
     }
     
-    private var shareSheet: some View {
-        // TODO: Implement share sheet
-        Text("Share functionality coming soon!")
-            .padding()
+    private var ratingFormView: some View {
+        NavigationView {
+            Form {
+                Section("WiFi Quality") {
+                    VStack(alignment: .leading) {
+                        HStack {
+                            Text("Rating: \(Int(wifiRating))")
+                                .font(ThemeManager.SwiftUIFonts.body)
+                            Spacer()
+                            Text("\(Int(wifiRating))/5")
+                                .font(ThemeManager.SwiftUIFonts.caption)
+                                .foregroundColor(.gray)
+                        }
+                        Slider(value: $wifiRating, in: 0...5, step: 1)
+                            .tint(ThemeManager.SwiftUIColors.coral)
+                    }
+                }
+                
+                Section("Noise Level") {
+                    Picker("Noise Level", selection: $noiseLevel) {
+                        Text("Low").tag("Low")
+                        Text("Medium").tag("Medium")
+                        Text("High").tag("High")
+                    }
+                    .pickerStyle(.segmented)
+                }
+                
+                Section("Outlets") {
+                    Toggle("Outlets Available", isOn: $outletsAvailable)
+                        .tint(ThemeManager.SwiftUIColors.coral)
+                }
+                
+                Section("Tips") {
+                    TextField("Share your tips about this spot...", text: $userTip, axis: .vertical)
+                        .lineLimit(3...6)
+                }
+            }
+            .navigationTitle("Rate This Spot")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Cancel") {
+                        showingRatingForm = false
+                    }
+                }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Submit") {
+                        submitRating()
+                    }
+                    .disabled(userTip.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+        }
     }
     
     // MARK: - Helper Methods
     
-    private func calculateAggregateRating() -> Double {
-        let wifiScore = Double(spot.wifiRating) / 5.0
-        let noiseScore = noiseRatingToScore(spot.noiseRating)
-        let outletScore = spot.outlets ? 1.0 : 0.0
-        
-        return (wifiScore + noiseScore + outletScore) / 3.0 * 5.0
+    private var distanceString: String {
+        guard let userLocation = locationService.currentLocation else {
+            logger.debug("userLocation nil for spot \(spot.name), using fallback.")
+            let fallbackLocation = CLLocation(latitude: 37.7749, longitude: -122.4194)
+            let distance = spot.location.distance(from: fallbackLocation)
+            return String(format: "%.1f miles", distance / 1609.34)
+        }
+        let distance = spot.location.distance(from: userLocation)
+        return String(format: "%.1f miles", distance / 1609.34)
     }
     
-    private func calculateUserRatingAverage() -> Double {
-        guard let userRatings = spot.userRatings?.allObjects as? [UserRating], !userRatings.isEmpty else {
-            return 0.0
+    private var overallRating: Double {
+        // Calculate overall rating using the same logic as SpotViewModel
+        let wifiNormalized = Double(spot.wifiRating)
+        
+        let noiseInverted: Double
+        switch spot.noiseRating.lowercased() {
+        case "low": noiseInverted = 5.0
+        case "medium": noiseInverted = 3.0
+        case "high": noiseInverted = 1.0
+        default: noiseInverted = 3.0
         }
         
-        let sum = userRatings.reduce(0) { $0 + Int($1.wifi) }
-        return Double(sum) / Double(userRatings.count)
+        let outlets = spot.outlets ? 5.0 : 1.0
+        let aggregateRating = min(5.0, (wifiNormalized + noiseInverted + outlets) / 3.0)
+        
+        // Calculate user rating average
+        guard let userRatings = spot.userRatings, userRatings.count > 0 else {
+            return round(aggregateRating * 2.0) / 2.0
+        }
+        
+        let totalRating = userRatings.reduce(into: 0.0) { sum, rating in
+            guard let userRating = rating as? UserRating else { return }
+            
+            let userWifi = Double(userRating.wifi)
+            let userNoise: Double
+            switch userRating.noise.lowercased() {
+            case "low": userNoise = 5.0
+            case "medium": userNoise = 3.0
+            case "high": userNoise = 1.0
+            default: userNoise = 3.0
+            }
+            let userOutlets = userRating.plugs ? 5.0 : 1.0
+            
+            let userAverage = min(5.0, (userWifi + userNoise + userOutlets) / 3.0)
+            sum += userAverage
+        }
+        
+        let userRatingAverage = min(5.0, totalRating / Double(userRatings.count))
+        let combinedRating = (aggregateRating * 0.5) + (userRatingAverage * 0.5)
+        return round(min(5.0, combinedRating) * 2.0) / 2.0
     }
     
-    private func noiseRatingToScore(_ noise: String) -> Double {
-        switch noise.lowercased() {
-        case "low": return 5.0
-        case "medium": return 3.0
-        case "high": return 1.0
-        default: return 3.0
+    private func openDirections() {
+        guard let userLocation = locationService.currentLocation else {
+            showError("Location not available. Please enable location services.")
+            return
+        }
+        
+        let sourcePlacemark = MKPlacemark(coordinate: userLocation.coordinate)
+        let destinationPlacemark = MKPlacemark(coordinate: CLLocationCoordinate2D(latitude: spot.latitude, longitude: spot.longitude))
+        
+        let sourceMapItem = MKMapItem(placemark: sourcePlacemark)
+        let destinationMapItem = MKMapItem(placemark: destinationPlacemark)
+        destinationMapItem.name = spot.name
+        
+        MKMapItem.openMaps(with: [sourceMapItem, destinationMapItem], launchOptions: [
+            MKLaunchOptionsDirectionsModeKey: MKLaunchOptionsDirectionsModeDriving
+        ])
+    }
+    
+    private func submitRating() {
+        let userRating = UserRating(context: viewContext)
+        userRating.wifi = Int16(wifiRating)
+        userRating.noise = noiseLevel
+        userRating.plugs = outletsAvailable
+        userRating.tip = userTip.trimmingCharacters(in: .whitespacesAndNewlines)
+        // UserRating doesn't have a timestamp property
+        userRating.spot = spot
+        
+        do {
+            try viewContext.save()
+            logger.info("Successfully saved user rating for \(spot.name)")
+            showingRatingForm = false
+            resetRatingForm()
+        } catch {
+            logger.error("Failed to save user rating: \(error.localizedDescription)")
+            showError("Failed to save rating: \(error.localizedDescription)")
         }
     }
     
-    private func noiseColor(_ noise: String) -> Color {
-        switch noise.lowercased() {
-        case "low": return .green
-        case "medium": return .orange
-        case "high": return .red
-        default: return .gray
+    private func savePhoto(_ image: UIImage) {
+        guard let imageData = image.jpegData(compressionQuality: 0.7) else {
+            showError("Failed to process image")
+            return
+        }
+        
+        let photo = Photo(context: viewContext)
+        photo.imageData = imageData
+        photo.timestamp = Date()
+        photo.spot = spot
+        photo.cloudKitRecordID = ""
+        
+        do {
+            try viewContext.save()
+            logger.info("Successfully saved photo for \(spot.name)")
+        } catch {
+            logger.error("Failed to save photo: \(error.localizedDescription)")
+            showError("Failed to save photo: \(error.localizedDescription)")
+        }
+    }
+    
+    private func resetRatingForm() {
+        wifiRating = 3.0
+        noiseLevel = "Medium"
+        outletsAvailable = true
+        userTip = ""
+    }
+    
+    private func showError(_ message: String) {
+        errorMessage = message
+        showingError = true
+    }
+}
+
+// MARK: - Image Picker
+
+struct ImagePicker: UIViewControllerRepresentable {
+    @Binding var selectedImage: UIImage?
+    let allowsEditing: Bool
+    let onImageSelected: (UIImage) -> Void
+    @Environment(\.dismiss) var dismiss
+    
+    func makeUIViewController(context: Context) -> UIImagePickerController {
+        let picker = UIImagePickerController()
+        picker.delegate = context.coordinator
+        picker.allowsEditing = allowsEditing
+        picker.sourceType = .photoLibrary
+        return picker
+    }
+    
+    func updateUIViewController(_ uiViewController: UIImagePickerController, context: Context) {}
+    
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
+    
+    class Coordinator: NSObject, UIImagePickerControllerDelegate, UINavigationControllerDelegate {
+        let parent: ImagePicker
+        
+        init(_ parent: ImagePicker) {
+            self.parent = parent
+        }
+        
+        func imagePickerController(_ picker: UIImagePickerController, didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey : Any]) {
+            if let image = info[.editedImage] as? UIImage ?? info[.originalImage] as? UIImage {
+                parent.onImageSelected(image)
+            }
+            parent.dismiss()
+        }
+        
+        func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
+            parent.dismiss()
         }
     }
 }
 
-// MARK: - Preview
+// MARK: - Map Annotation Item
 
-#Preview {
-    let context = PersistenceController.preview.container.viewContext
-    let sampleSpot = Spot(context: context)
-    sampleSpot.name = "Blue Bottle Coffee"
-    sampleSpot.address = "150 Greenwich St, New York, NY 10007"
-    sampleSpot.latitude = 40.7128
-    sampleSpot.longitude = -74.0060
-    sampleSpot.wifiRating = 5
-    sampleSpot.noiseRating = "Medium"
-    sampleSpot.outlets = true
-    sampleSpot.tips = "Great coffee and strong WiFi make it ideal for productivity. Arrive early for the best seats."
-    
-    return NavigationView {
-        SpotDetailView(spot: sampleSpot, userLocation: CLLocation(latitude: 40.7128, longitude: -74.0060))
+struct MapAnnotationItem: Identifiable {
+    let id = UUID()
+    let coordinate: CLLocationCoordinate2D
+    let title: String
+}
+
+// MARK: - Extensions
+
+// MARK: - Previews
+
+struct SpotDetailView_Previews: PreviewProvider {
+    static var previews: some View {
+        let persistenceController = PersistenceController.preview
+        let viewContext = persistenceController.container.viewContext
+        
+        // Create a sample spot
+        let sampleSpot = Spot(context: viewContext)
+        sampleSpot.name = "Sample Cafe"
+        sampleSpot.address = "123 Coffee Lane, New York, NY"
+        sampleSpot.latitude = 40.7128
+        sampleSpot.longitude = -74.0060
+        sampleSpot.wifiRating = 5
+        sampleSpot.noiseRating = "Low"
+        sampleSpot.outlets = true
+        sampleSpot.tips = "Great coffee and cozy atmosphere. Perfect for remote work."
+        sampleSpot.lastSeeded = Date()
+        sampleSpot.cloudKitRecordID = "sample-record-id"
+        
+        // Add a sample user rating
+        let sampleUserRating = UserRating(context: viewContext)
+        sampleUserRating.wifi = 4
+        sampleUserRating.noise = "Low"
+        sampleUserRating.plugs = true
+        sampleUserRating.tip = "Loved the ambiance and the strong espresso!"
+        // UserRating doesn't have a timestamp property
+        sampleUserRating.spot = sampleSpot
+        
+        // Add a sample photo
+        let samplePhoto = Photo(context: viewContext)
+        samplePhoto.imageData = Data()
+        samplePhoto.timestamp = Date()
+        samplePhoto.spot = sampleSpot
+        samplePhoto.cloudKitRecordID = "sample-photo-id"
+        
+        let userLocation = CLLocation(latitude: 40.7000, longitude: -74.0100)
+        
+        return SpotDetailView(spot: sampleSpot, locationService: LocationService.shared)
+            .environment(\.managedObjectContext, viewContext)
     }
-    .environment(\.managedObjectContext, context)
 }
