@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <model type="com.apple.IDECoreDataModeler.DataModel" documentVersion="1.0" lastSavedToolsVersion="22758" systemVersion="23F79" minimumToolsVersion="Automatic" sourceLanguage="Swift" userDefinedModelVersionIdentifier="">
-    <entity name="Spot" representedClassName="Spot" syncable="YES" codeGenerationType="Manual/None">
+        <entity name="Spot" representedClassName="Spot" syncable="YES">
         <attribute name="name" optional="NO" attributeType="String"/>
         <attribute name="address" optional="NO" attributeType="String"/>
         <attribute name="latitude" optional="NO" attributeType="Double" defaultValueString="0.0"/>
@@ -15,15 +15,15 @@
         <attribute name="cloudKitRecordID" optional="NO" attributeType="String"/>
         <relationship name="userRatings" optional="YES" toMany="YES" deletionRule="Cascade" destinationEntity="UserRating" inverseName="spot" inverseEntity="UserRating"/>
     </entity>
-    <entity name="UserRating" representedClassName="UserRating" syncable="YES" codeGenerationType="Manual/None">
+        <entity name="UserRating" representedClassName="UserRating" syncable="YES">
         <attribute name="wifi" optional="NO" attributeType="Integer 16" defaultValueString="0"/>
         <attribute name="noise" optional="NO" attributeType="String"/>
         <attribute name="plugs" optional="NO" attributeType="Boolean" defaultValueString="NO"/>
         <attribute name="tip" optional="NO" attributeType="String"/>
-        <relationship name="spot" optional="NO" maxCount="1" deletionRule="Nullify" destinationEntity="Spot" inverseName="userRatings" inverseEntity="Spot"/>
+        <relationship name="spot" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="Spot" inverseName="userRatings" inverseEntity="Spot"/>
     </entity>
     <elements>
-        <element name="Spot" positionX="-63" positionY="-18" width="128" height="194"/>
-        <element name="UserRating" positionX="-63" positionY="216" width="128" height="119"/>
+        <element name="Spot" positionX="-63" positionY="-18" width="128" height="179"/>
+        <element name="UserRating" positionX="-18" positionY="-18" width="128" height="104"/>
     </elements>
 </model>

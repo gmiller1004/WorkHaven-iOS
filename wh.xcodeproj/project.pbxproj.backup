@@ -6,9 +6,6 @@
 	objectVersion = 77;
 	objects = {
 
-/* Begin PBXBuildFile section */
-/* End PBXBuildFile section */
-
 /* Begin PBXContainerItemProxy section */
 		5BF796072E837450002BEB90 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -82,7 +79,6 @@
 				5BF796092E837450002BEB90 /* whTests */,
 				5BF796132E837450002BEB90 /* whUITests */,
 				5BF795F32E83744E002BEB90 /* Products */,
-				5BF7970C2E838730002BEB90 /* Recovered References */,
 			);
 			sourceTree = "<group>";
 		};
@@ -94,14 +90,6 @@
 				5BF796102E837450002BEB90 /* whUITests.xctest */,
 			);
 			name = Products;
-			sourceTree = "<group>";
-		};
-		5BF7970C2E838730002BEB90 /* Recovered References */ = {
-			isa = PBXGroup;
-			children = (
-				5BF796302E837450002BEB90 /* wh/WorkHaven.xcdatamodeld */,
-			);
-			name = "Recovered References";
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -223,8 +211,8 @@
 		5BF795F02E83744E002BEB90 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
-                        files = (
-                        );
+			files = (
+			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		5BF796042E837450002BEB90 /* Resources */ = {
