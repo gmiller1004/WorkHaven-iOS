@@ -101,47 +101,49 @@ class SpotDiscoveryService: ObservableObject {
     // MARK: - Core Data Check
     
     /**
-     * Checks for existing spots within the specified radius
-     * Uses composite key (name + address) and proximity checking for accurate deduplication
+     * Checks for existing spots within the specified radius with optimized Core Data querying
+     * Uses composite predicate for name+address matching and proximity checking
+     * Only returns spots with lastSeeded > 7 days ago to allow for refresh
      */
     private func checkExistingSpots(near location: CLLocation, radius: Double) async -> [Spot] {
-        return await withCheckedContinuation { continuation in
-            persistenceController.container.performBackgroundTask { context in
-                let request: NSFetchRequest<Spot> = Spot.fetchRequest()
-                
-                // Create a bounding box for efficient querying
-                let latRange = radius / 111000.0 // Rough conversion to degrees
-                let lngRange = radius / (111000.0 * cos(location.coordinate.latitude * .pi / 180))
-                
-                let minLat = location.coordinate.latitude - latRange
-                let maxLat = location.coordinate.latitude + latRange
-                let minLng = location.coordinate.longitude - lngRange
-                let maxLng = location.coordinate.longitude + lngRange
-                
-                request.predicate = NSPredicate(
-                    format: "latitude >= %f AND latitude <= %f AND longitude >= %f AND longitude <= %f",
-                    minLat, maxLat, minLng, maxLng
-                )
-                
-                do {
-                    let spots = try context.fetch(request)
-                    // Filter by actual distance to get precise results
-                    let nearbySpots = spots.filter { spot in
-                        let spotLocation = CLLocation(latitude: spot.latitude, longitude: spot.longitude)
-                        return location.distance(from: spotLocation) <= radius
-                    }
-                    continuation.resume(returning: nearbySpots)
-                } catch {
-                    self.logger.error("Failed to fetch existing spots: \(error.localizedDescription)")
-                    self.errorMessage = "Failed to check existing spots: \(error.localizedDescription)"
-                    continuation.resume(returning: [])
-                }
+        let context = persistenceController.container.viewContext
+        let request: NSFetchRequest<Spot> = Spot.fetchRequest()
+        
+        // Create a bounding box for efficient querying
+        let latRange = radius / 111000.0 // Rough conversion to degrees
+        let lngRange = radius / (111000.0 * cos(location.coordinate.latitude * .pi / 180))
+        
+        let minLat = location.coordinate.latitude - latRange
+        let maxLat = location.coordinate.latitude + latRange
+        let minLng = location.coordinate.longitude - lngRange
+        let maxLng = location.coordinate.longitude + lngRange
+        
+        // Date threshold for refresh (7 days ago)
+        let sevenDaysAgo = Calendar.current.date(byAdding: .day, value: -7, to: Date()) ?? Date()
+        
+        request.predicate = NSPredicate(
+            format: "latitude >= %f AND latitude <= %f AND longitude >= %f AND longitude <= %f AND lastSeeded > %@",
+            minLat, maxLat, minLng, maxLng, sevenDaysAgo as NSDate
+        )
+        
+        do {
+            let spots = try context.fetch(request)
+            // Filter by actual distance to get precise results
+            let nearbySpots = spots.filter { spot in
+                let spotLocation = CLLocation(latitude: spot.latitude, longitude: spot.longitude)
+                return location.distance(from: spotLocation) <= radius
             }
+            logger.info("Found \(nearbySpots.count) existing spots within radius (lastSeeded > 7 days ago)")
+            return nearbySpots
+        } catch {
+            logger.error("Failed to fetch existing spots: \(error.localizedDescription)")
+            errorMessage = "Failed to check existing spots: \(error.localizedDescription)"
+            return []
         }
     }
     
     /**
-     * Checks if a spot already exists using composite key and proximity
+     * Checks if a spot already exists using composite key and proximity against Core Data
      * - Parameter mapItem: The MKMapItem to check for duplicates
      * - Parameter existingSpots: Array of existing spots to check against
      * - Returns: True if a duplicate is found, false otherwise
@@ -175,6 +177,33 @@ class SpotDiscoveryService: ObservableObject {
         }
         
         return false
+    }
+    
+    /**
+     * Checks if a spot exists in Core Data using composite key (name + address)
+     * - Parameter name: Spot name
+     * - Parameter address: Spot address
+     * - Returns: True if spot exists, false otherwise
+     */
+    private func spotExistsInCoreData(name: String, address: String) -> Bool {
+        let context = persistenceController.container.viewContext
+        let request: NSFetchRequest<Spot> = Spot.fetchRequest()
+        
+        let normalizedName = name.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedAddress = address.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        
+        request.predicate = NSPredicate(
+            format: "name ==[c] %@ AND address ==[c] %@",
+            normalizedName, normalizedAddress
+        )
+        
+        do {
+            let count = try context.count(for: request)
+            return count > 0
+        } catch {
+            logger.error("Failed to check spot existence in Core Data: \(error.localizedDescription)")
+            return false
+        }
     }
     
     // MARK: - MKLocalSearch Implementation
@@ -219,6 +248,7 @@ class SpotDiscoveryService: ObservableObject {
         if allMapItems.isEmpty {
             logger.info("No new spots to discover, returning existing spots")
             await updateDiscoveryState(progress: "No new spots found")
+            errorMessage = "No new spots found - all locations already discovered"
             return existingSpots
         }
         
@@ -277,6 +307,7 @@ class SpotDiscoveryService: ObservableObject {
     
     /**
      * Enriches map items with AI-generated data and creates Spot entities
+     * Skips Grok API calls for spots already found in Core Data
      */
     private func enrichAndCreateSpots(from mapItems: [MKMapItem]) async throws -> [Spot] {
         guard let apiKey = getGrokAPIKey(), !apiKey.isEmpty else {
@@ -286,8 +317,19 @@ class SpotDiscoveryService: ObservableObject {
         
         var enrichedSpots: [Spot] = []
         let batchSize = 5 // Process in small batches to avoid overwhelming the API
+        var skippedCount = 0
         
         for (index, mapItem) in mapItems.enumerated() {
+            let name = mapItem.name ?? "Unknown Location"
+            let address = mapItem.placemark.title ?? "Unknown Address"
+            
+            // Check if spot already exists in Core Data
+            if spotExistsInCoreData(name: name, address: address) {
+                logger.info("Skipping Grok API call for existing spot: \(name) at \(address)")
+                skippedCount += 1
+                continue
+            }
+            
             await updateDiscoveryState(progress: "Enriching location \(index + 1)/\(mapItems.count)...")
             
             do {
@@ -300,12 +342,17 @@ class SpotDiscoveryService: ObservableObject {
                 }
                 
             } catch {
-                logger.error("Failed to enrich spot \(mapItem.name ?? "Unknown"): \(error.localizedDescription)")
+                logger.error("Failed to enrich spot \(name): \(error.localizedDescription)")
                 errorMessage = "Failed to enrich spot: \(error.localizedDescription)"
                 // Create spot with defaults if API fails
                 let defaultSpot = try await createSpotWithDefaults(mapItem: mapItem)
                 enrichedSpots.append(defaultSpot)
             }
+        }
+        
+        // Log API optimization results
+        if skippedCount > 0 {
+            logger.info("Skipped \(skippedCount) Grok API calls for existing spots")
         }
         
         // Deduplicate by address and save to Core Data
@@ -504,7 +551,7 @@ class SpotDiscoveryService: ObservableObject {
     
     /**
      * Deduplicates spots using composite key (name + address) and proximity
-     * Uses Set with normalized composite keys for efficient duplicate detection
+     * Checks against Core Data before saving to prevent duplicates
      */
     private func deduplicateSpots(_ spots: [Spot]) -> [Spot] {
         var seenKeys: Set<String> = []
@@ -514,9 +561,15 @@ class SpotDiscoveryService: ObservableObject {
             // Create composite key for exact matching
             let compositeKey = "\(spot.name.lowercased().trimmingCharacters(in: .whitespacesAndNewlines))|\(spot.address.lowercased().trimmingCharacters(in: .whitespacesAndNewlines))"
             
-            // Check for exact duplicate
+            // Check for exact duplicate in current batch
             if seenKeys.contains(compositeKey) {
-                logger.info("Skipping exact duplicate: \(spot.name) at \(spot.address)")
+                logger.info("Skipping exact duplicate in batch: \(spot.name) at \(spot.address)")
+                continue
+            }
+            
+            // Check if spot already exists in Core Data
+            if spotExistsInCoreData(name: spot.name, address: spot.address) {
+                logger.info("Skipping spot that exists in Core Data: \(spot.name) at \(spot.address)")
                 continue
             }
             
@@ -540,7 +593,7 @@ class SpotDiscoveryService: ObservableObject {
             }
         }
         
-        logger.info("Deduplicated \(spots.count) spots to \(deduplicated.count)")
+        logger.info("Deduplicated \(spots.count) spots to \(deduplicated.count) (checked against Core Data)")
         return deduplicated
     }
     
