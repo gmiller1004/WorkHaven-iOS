@@ -88,14 +88,18 @@ class SpotViewModel: ObservableObject {
                 await discoverNewSpots(near: discoveryLocation)
             } else {
                 logger.info("Using existing spots (\(existingSpots.count) found)")
-                spots = sortSpots(existingSpots, from: near)
-                isSeeding = false
+                await MainActor.run {
+                    self.spots = self.sortSpots(existingSpots, from: near)
+                    self.isSeeding = false
+                }
             }
             
         } catch {
             logger.error("Failed to load spots: \(error.localizedDescription)")
-            errorMessage = "Failed to load spots: \(error.localizedDescription)"
-            isSeeding = false
+            await MainActor.run {
+                self.errorMessage = "Failed to load spots: \(error.localizedDescription)"
+                self.isSeeding = false
+            }
         }
     }
     
@@ -249,17 +253,24 @@ class SpotViewModel: ObservableObject {
             // Sort spots by distance and rating
             let sortedSpots = sortSpots(discoveredSpots, from: near)
             
-            spots = sortedSpots
+            // Update spots and ensure UI refresh
+            await MainActor.run {
+                self.spots = sortedSpots
+                self.isSeeding = false
+                self.discoveryProgress = ""
+            }
+            
             logger.info("Successfully loaded \(sortedSpots.count) spots")
             
         } catch {
             logger.error("Discovery failed: \(error.localizedDescription)")
-            errorMessage = "Discovery failed: \(error.localizedDescription)"
+            await MainActor.run {
+                self.errorMessage = "Discovery failed: \(error.localizedDescription)"
+                self.isSeeding = false
+                self.discoveryProgress = ""
+            }
             progressTask.cancel()
         }
-        
-        isSeeding = false
-        discoveryProgress = ""
     }
     
     /**
