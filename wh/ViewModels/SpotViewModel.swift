@@ -72,6 +72,9 @@ class SpotViewModel: ObservableObject {
     func loadSpots(near: CLLocation?) async {
         logger.info("Loading spots near \(near?.coordinate.latitude ?? 0.0), \(near?.coordinate.longitude ?? 0.0)")
         
+        // Debug: Check total spots in database
+        debugSpotCount()
+        
         // Clear any previous errors
         errorMessage = nil
         isSeeding = true
@@ -140,6 +143,33 @@ class SpotViewModel: ObservableObject {
         logger.info("Cleared spot cache")
     }
     
+    /**
+     * Debug method to check total spots in database
+     */
+    func debugSpotCount() {
+        let context = persistenceController.container.viewContext
+        let request: NSFetchRequest<Spot> = Spot.fetchRequest()
+        
+        do {
+            let totalSpots = try context.fetch(request)
+            logger.info("DEBUG: Total spots in database: \(totalSpots.count)")
+            
+            if !totalSpots.isEmpty {
+                let recentSpots = totalSpots.filter { spot in
+                    spot.lastSeeded > Calendar.current.date(byAdding: .day, value: -1, to: Date()) ?? Date()
+                }
+                logger.info("DEBUG: Spots seeded in last 24 hours: \(recentSpots.count)")
+                
+                // Log a few sample spots
+                for (index, spot) in totalSpots.prefix(3).enumerated() {
+                    logger.info("DEBUG: Spot \(index + 1): \(spot.name ?? "Unknown") - Last seeded: \(spot.lastSeeded.description)")
+                }
+            }
+        } catch {
+            logger.error("DEBUG: Failed to fetch total spot count: \(error.localizedDescription)")
+        }
+    }
+    
     // MARK: - Private Methods
     
     /**
@@ -187,6 +217,14 @@ class SpotViewModel: ObservableObject {
             lastCacheUpdate = Date()
             
             logger.info("Fetched \(nearbySpots.count) existing spots from Core Data within radius")
+            
+            // Debug: Log some details about fetched spots
+            if !nearbySpots.isEmpty {
+                logger.info("Sample spot: \(nearbySpots.first?.name ?? "Unknown") - Last seeded: \(nearbySpots.first?.lastSeeded.description ?? "Unknown")")
+            } else {
+                logger.info("No existing spots found in Core Data")
+            }
+            
             return nearbySpots
             
         } catch {
@@ -243,34 +281,23 @@ class SpotViewModel: ObservableObject {
             }
         }
         
-        do {
-            // Start discovery
-            let discoveredSpots = await spotDiscoveryService.discoverSpots(near: near, radius: searchRadius)
-            
-            // Cancel progress monitoring
-            progressTask.cancel()
-            
-            // Sort spots by distance and rating
-            let sortedSpots = sortSpots(discoveredSpots, from: near)
-            
-            // Update spots and ensure UI refresh
-            await MainActor.run {
-                self.spots = sortedSpots
-                self.isSeeding = false
-                self.discoveryProgress = ""
-            }
-            
-            logger.info("Successfully loaded \(sortedSpots.count) spots")
-            
-        } catch {
-            logger.error("Discovery failed: \(error.localizedDescription)")
-            await MainActor.run {
-                self.errorMessage = "Discovery failed: \(error.localizedDescription)"
-                self.isSeeding = false
-                self.discoveryProgress = ""
-            }
-            progressTask.cancel()
+        // Start discovery
+        let discoveredSpots = await spotDiscoveryService.discoverSpots(near: near, radius: searchRadius)
+        
+        // Cancel progress monitoring
+        progressTask.cancel()
+        
+        // Sort spots by distance and rating
+        let sortedSpots = sortSpots(discoveredSpots, from: near)
+        
+        // Update spots and ensure UI refresh
+        await MainActor.run {
+            self.spots = sortedSpots
+            self.isSeeding = false
+            self.discoveryProgress = ""
         }
+        
+        logger.info("Successfully loaded \(sortedSpots.count) spots")
     }
     
     /**

@@ -580,7 +580,8 @@ class SpotDiscoveryService: ObservableObject {
         spot.longitude = mapItem.placemark.coordinate.longitude
         spot.lastModified = Date()
         spot.lastSeeded = Date()
-        spot.cloudKitRecordID = UUID().uuidString
+        // Let CloudKit generate the record ID automatically
+        spot.cloudKitRecordID = ""
         spot.markAsModified()
         
         // Parse enriched data
@@ -616,7 +617,8 @@ class SpotDiscoveryService: ObservableObject {
         spot.longitude = mapItem.placemark.coordinate.longitude
         spot.lastModified = Date()
         spot.lastSeeded = Date()
-        spot.cloudKitRecordID = UUID().uuidString
+        // Let CloudKit generate the record ID automatically
+        spot.cloudKitRecordID = ""
         spot.markAsModified()
         
         // Use batch data
@@ -658,7 +660,8 @@ class SpotDiscoveryService: ObservableObject {
         spot.longitude = mapItem.placemark.coordinate.longitude
         spot.lastModified = Date()
         spot.lastSeeded = Date()
-        spot.cloudKitRecordID = UUID().uuidString
+        // Let CloudKit generate the record ID automatically
+        spot.cloudKitRecordID = ""
         spot.markAsModified()
         
         setDefaultValues(for: spot)
@@ -779,8 +782,19 @@ class SpotDiscoveryService: ObservableObject {
      * Saves spots to Core Data
      */
     private func saveSpotsToCoreData(_ spots: [Spot]) async {
-        await persistenceController.saveAsync()
-        logger.info("Saved \(spots.count) spots to Core Data")
+        let context = persistenceController.container.viewContext
+        
+        do {
+            if context.hasChanges {
+                try context.save()
+                logger.info("Saved \(spots.count) spots to Core Data")
+                
+                // Trigger CloudKit sync
+                logger.info("CloudKit sync triggered for \(spots.count) spots")
+            }
+        } catch {
+            logger.error("Failed to save spots to Core Data: \(error.localizedDescription)")
+        }
     }
     
     /**
