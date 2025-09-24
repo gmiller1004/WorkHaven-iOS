@@ -787,7 +787,7 @@ class SpotDiscoveryService: ObservableObject {
      * Updates discovery state
      */
     @MainActor
-    private func updateDiscoveryState(isDiscovering: Bool? = nil, progress: String? = nil) {
+    private func updateDiscoveryState(isDiscovering: Bool? = nil, progress: String? = nil) async {
         if let isDiscovering = isDiscovering {
             self.isDiscovering = isDiscovering
         }
