@@ -1,0 +1,275 @@
+WorkHaven Cursor Agent Rules
+
+Artifact ID: 196ba84c-42e5-48e1-9239-6cb6959a5db0 (Updated) Version: 3.0 Date: September 23, 2025 Project: WorkHaven (bundle ID: com.nextsizzle.wh, CloudKit container: iCloud.com.nextsizzle.wh)
+
+Overview
+
+These rules govern Cursor agent prompts for the WorkHaven iOS app rebuild, a SwiftUI app helping remote workers find work-friendly spots (cafes, libraries, parks, co-working spaces) using MKLocalSearch for accurate locations and xAI Grok API for enriching WiFi (1-5 stars), noise (Low/Medium/High), plugs (Yes/No), and tips. The app uses Core Data with NSPersistentCloudKitContainer for sync, supports location-based sorting (distance then aggregate rating), push notifications, and a coffee shop theme (mocha #8B5E3C, latte #FFF8E7, coral #F28C38, Avenir Next font). All data is dynamically generated via MKLocalSearch and Grok; no static data sources are used.
+
+General Rules
+
+
+
+
+
+Swift Version: Use Swift 5.9+ for iOS 18+ compatibility.
+
+
+
+File Structure:
+
+
+
+
+
+Place services in Services/ (e.g., SpotDiscoveryService.swift, CloudKitManager.swift).
+
+
+
+Place view models in ViewModels/ (e.g., SpotViewModel.swift).
+
+
+
+Place views in Views/ (e.g., SpotListView.swift, SettingsView.swift).
+
+
+
+Place models in Models/ (e.g., Spot+CoreDataClass.swift).
+
+
+
+Place utilities in Utilities/ (e.g., ThemeManager.swift).
+
+
+
+Core Data model: WorkHaven.xcdatamodeld in root.
+
+
+
+Output Format: Generate standalone .swift files with header comments including prompt description, date (Sep 23, 2025), and artifact ID. Use only native frameworks (SwiftUI, CoreData, MapKit, CloudKit, URLSession); no external dependencies (e.g., Alamofire).
+
+
+
+Error Handling: Use async/await, throw custom errors (e.g., enum AppError: Error), log to console (e.g., print("Error: \(error.localizedDescription)")), show user-friendly alerts (e.g., "No spots found—try again").
+
+
+
+Accessibility: Add VoiceOver labels (e.g., "Spot, 0.5 miles, 4.5 stars"), ensure high-contrast colors (mocha #8B5E3C on latte #FFF8E7).
+
+Project-Specific Rules
+
+
+
+
+
+Core Data Model:
+
+
+
+
+
+Entities: Spot (attributes: name: String, address: String, latitude: Double, longitude: Double, wifiRating: Int16, noiseRating: String, outlets: Bool, tips: String, photoURL: String?, lastModified: Date, cloudKitRecordID: String) and UserRating (attributes: wifi: Int16, noise: String, plugs: Bool, tip: String, relationship: spot to Spot, one-to-many, delete rule: Cascade).
+
+
+
+Set Codegen to Manual/None, generate NSManagedObject subclasses in Models/.
+
+
+
+Enable CloudKit sync in model settings (Used with CloudKit).
+
+
+
+CloudKit:
+
+
+
+
+
+Use private database (iCloud.com.nextsizzle.wh).
+
+
+
+Ensure recordName is queryable for Spot and UserRating (set manually in CloudKit Dashboard: Schema > Record Type > Edit Indexes > Add recordName > Queryable).
+
+
+
+Support push notifications for Spot changes (e.g., new spots added).
+
+
+
+Wipe data on first launch: Delete all local Core Data and CloudKit records if UserDefaults.standard.string(forKey: "LastWipedVersion") != CFBundleShortVersionString, then set to current version.
+
+
+
+Dynamic Seeding:
+
+
+
+
+
+Use MKLocalSearch to find spots (categories: "coffee shop", "library", "park", "co-working space") within 20 miles of user location.
+
+
+
+Enrich with xAI Grok API (model: grok-4-fast-non-reasoning, endpoint: https://api.x.ai/v1/chat/completions, header: Authorization Bearer from ProcessInfo.environment["GROK_API_KEY"]).
+
+
+
+Grok prompt: "For [name] at [address], estimate WiFi rating (1-5 stars), noise level (Low/Medium/High), plugs (Yes/No), and a short tip based on typical similar venues. Respond in JSON: {wifi: number, noise: string, plugs: bool, tip: string}."
+
+
+
+Seed 10-15 spots only if no spots exist in Core Data within 20 miles or user triggers "Regenerate Now."
+
+
+
+Cache spots with lastSeeded: Date; refresh only if no spots or user-initiated.
+
+
+
+Fallback defaults if Grok fails: wifiRating=3, noiseRating="Medium", outlets=false, tips="Auto-discovered from Apple Maps".
+
+
+
+Rating System:
+
+
+
+
+
+Aggregate rating: (wifiNormalized + noiseInverted + plugs) / 3, rounded to 0.5 (WiFi 1-5, Noise Low=5/Medium=3/High=1, Plugs Yes=5/No=1).
+
+
+
+Overall rating: 50% aggregate + 50% average of UserRating entries (fallback to aggregate if no user ratings).
+
+
+
+Store user ratings in UserRating entity, sync via CloudKit.
+
+
+
+UI/UX:
+
+
+
+
+
+Use ThemeManager for consistent styling: colors (mocha #8B5E3C, latte #FFF8E7, coral #F28C38), Avenir Next font, spacing (sm=8pt, md=16pt).
+
+
+
+SpotListView/SpotSearchView: Display spots in rows with name, address, distance (e.g., "0.5 mi"), overall rating (coral stars), icons (WiFi, noise, plugs).
+
+
+
+SettingsView: Include toggle "Auto-Discover Spots" (saved in UserDefaults), "Regenerate Now" button to force re-seeding.
+
+
+
+Loading spinner: Coffee steam animation in latte #FFF8E7.
+
+
+
+Alerts: Use mocha #8B5E3C for buttons, latte #FFF8E7 background.
+
+
+
+Location Services:
+
+
+
+
+
+Use LocationService with CLLocationManager for user location.
+
+
+
+Request when-in-use permission first (NSLocationWhenInUseUsageDescription); prompt always permission (NSLocationAlwaysAndWhenInUseUsageDescription) only for geofencing notifications.
+
+
+
+Sort spots by distance (CLLocation.distance(from:)) then overallRating.
+
+
+
+Security:
+
+
+
+
+
+Store xAI API key in Secrets.xcconfig (excluded from Git).
+
+
+
+Access via ProcessInfo.environment["GROK_API_KEY"].
+
+
+
+Ensure Secrets.xcconfig is in .gitignore.
+
+
+
+Testing:
+
+
+
+
+
+Test on iPhone 16 Pro simulator (iOS 18+, Sep 23, 2025).
+
+
+
+Verify: Location prompts appear, CloudKit syncs without errors, Grok API returns valid JSON, UI adheres to theme.
+
+
+
+Log key operations (e.g., print("Seeded \(spots.count) spots"), print("CloudKit sync error: \(error)")).
+
+
+
+Documentation:
+
+
+
+
+
+Update WorkHaven_Complete_Documentation.md with each generated file’s purpose and integration steps.
+
+
+
+Include architecture overview (e.g., SwiftUI MVVM, Core Data + CloudKit).
+
+Prompt Execution
+
+
+
+
+
+Generate one file per prompt unless specified (e.g., SpotDiscoveryService.swift).
+
+
+
+Include only necessary imports (e.g., import SwiftUI, import CoreData, import MapKit).
+
+
+
+Use async/await for network (Grok API, MKLocalSearch) and CloudKit operations.
+
+
+
+Add debug logs for key actions (e.g., seeding, sync, errors).
+
+
+
+Ensure files integrate with existing project (e.g., reference PersistenceController.shared, ThemeManager).
+
+
+
+Use consistent naming: camelCase for variables, PascalCase for types.
+
+
+
+Avoid deprecated APIs (e.g., use CLLocationManager.requestWhenInUseAuthorization()).
