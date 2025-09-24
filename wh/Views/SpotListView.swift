@@ -19,7 +19,7 @@ struct SpotListView: View {
     
     // MARK: - Properties
     
-    @StateObject private var spotViewModel = SpotViewModel()
+    @ObservedObject var spotViewModel: SpotViewModel
     @ObservedObject private var locationService = LocationService.shared
     @State private var showingError = false
     
@@ -28,10 +28,11 @@ struct SpotListView: View {
     // MARK: - Initialization
     
     /**
-     * Initializes SpotListView with default SpotViewModel
+     * Initializes SpotListView with shared SpotViewModel
+     * - Parameter spotViewModel: The shared SpotViewModel instance from ContentView
      */
-    init() {
-        // Using @StateObject with default initialization
+    init(spotViewModel: SpotViewModel) {
+        self.spotViewModel = spotViewModel
     }
     
     // MARK: - Body
@@ -467,6 +468,6 @@ struct SteamLine: View {
 // MARK: - Preview
 
 #Preview {
-    SpotListView()
+    SpotListView(spotViewModel: SpotViewModel())
         .environment(\.managedObjectContext, PersistenceController.preview.container.viewContext)
 }

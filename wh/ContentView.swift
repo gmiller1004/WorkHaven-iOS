@@ -42,7 +42,7 @@ struct ContentView: View {
     var body: some View {
         TabView {
             // MARK: - Spots Tab
-            SpotListView()
+            SpotListView(spotViewModel: spotViewModel)
                 .environment(\.managedObjectContext, viewContext)
                 .tabItem {
                     Label("Spots", systemImage: "mappin.circle")
