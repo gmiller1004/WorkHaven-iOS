@@ -74,9 +74,9 @@ struct ContentView: View {
                 } else {
                     // Trigger initial load if location became available
                     logger.info("Location became available, triggering initial load")
+                    hasPerformedInitialLoad = true // Set flag immediately to prevent race condition
                     Task {
                         await spotViewModel.loadSpots(near: location)
-                        hasPerformedInitialLoad = true
                     }
                 }
             }
