@@ -20,10 +20,19 @@ struct SpotListView: View {
     // MARK: - Properties
     
     @StateObject private var spotViewModel = SpotViewModel()
-    @State private var userLocation: CLLocation?
+    @ObservedObject private var locationService = LocationService.shared
     @State private var showingError = false
     
     private let logger = Logger(subsystem: "com.nextsizzle.wh", category: "SpotListView")
+    
+    // MARK: - Initialization
+    
+    /**
+     * Initializes SpotListView with default SpotViewModel
+     */
+    init() {
+        // Using @StateObject with default initialization
+    }
     
     // MARK: - Body
     
@@ -35,13 +44,29 @@ struct SpotListView: View {
                     .ignoresSafeArea()
                 
                 if spotViewModel.isSeeding {
-                    // Coffee steam spinner during loading
+                    // Progress view during loading
                     VStack(spacing: ThemeManager.Spacing.md) {
-                        CoffeeSteamSpinner()
-                        Text("Discovering work spots...")
+                        ProgressView()
+                            .scaleEffect(1.2)
+                            .tint(ThemeManager.SwiftUIColors.coral)
+                        
+                        Text(spotViewModel.discoveryProgress.isEmpty ? "Discovering work spots..." : spotViewModel.discoveryProgress)
                             .font(ThemeManager.SwiftUIFonts.body)
                             .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, ThemeManager.Spacing.md)
                     }
+                    .padding(ThemeManager.Spacing.md)
+                    .background(
+                        RoundedRectangle(cornerRadius: ThemeManager.CornerRadius.medium)
+                            .fill(ThemeManager.SwiftUIColors.latte)
+                            .shadow(
+                                color: ThemeManager.SwiftUIColors.mocha.opacity(0.1),
+                                radius: 4,
+                                x: 0,
+                                y: 2
+                            )
+                    )
                 } else if spotViewModel.spots.isEmpty {
                     // Empty state
                     emptyStateView
@@ -67,7 +92,9 @@ struct SpotListView: View {
                 .foregroundColor(ThemeManager.SwiftUIColors.mocha)
             } message: {
                 Text(spotViewModel.errorMessage ?? "An unknown error occurred")
+                    .foregroundColor(ThemeManager.SwiftUIColors.mocha)
             }
+            .background(ThemeManager.SwiftUIColors.latte)
             .onAppear {
                 loadSpotsIfNeeded()
             }
@@ -82,7 +109,8 @@ struct SpotListView: View {
     private var spotsList: some View {
         List {
             ForEach(spotViewModel.spots, id: \.objectID) { spot in
-                SpotListRowView(spot: spot, userLocation: userLocation)
+                SpotListRowView(spot: spot, userLocation: locationService.currentLocation)
+                    .id("\(spot.objectID)-\(locationService.currentLocation?.coordinate.latitude ?? 0)-\(locationService.currentLocation?.coordinate.longitude ?? 0)")
                     .listRowBackground(ThemeManager.SwiftUIColors.latte)
                     .listRowSeparator(.hidden)
                     .listRowInsets(EdgeInsets(
@@ -95,6 +123,9 @@ struct SpotListView: View {
         }
         .listStyle(PlainListStyle())
         .background(ThemeManager.SwiftUIColors.latte)
+        .refreshable {
+            await refreshSpots()
+        }
     }
     
     /**
@@ -143,7 +174,7 @@ struct SpotListView: View {
      * Loads spots if user location is available
      */
     private func loadSpotsIfNeeded() {
-        guard let location = userLocation else {
+        guard let location = locationService.currentLocation else {
             logger.info("No user location available, skipping spot loading")
             return
         }
@@ -157,7 +188,7 @@ struct SpotListView: View {
      * Refreshes spots with current user location
      */
     private func refreshSpots() async {
-        guard let location = userLocation else {
+        guard let location = locationService.currentLocation else {
             logger.warning("Cannot refresh spots: no user location")
             return
         }
@@ -186,15 +217,22 @@ public struct SpotListRowView: View {
     }
     
     private var distance: Double {
-        guard let userLocation = userLocation else { return 0 }
-        return spotViewModel.distanceToSpot(spot, from: userLocation)
+        let locationToUse = userLocation ?? CLLocation(latitude: 37.7749, longitude: -122.4194)
+        
+        if userLocation == nil {
+            print("DEBUG: userLocation nil for spot \(spot.name), using fallback location")
+        }
+        
+        let tempViewModel = SpotViewModel()
+        let distance = tempViewModel.distanceToSpot(spot, from: locationToUse)
+        return distance
     }
     
     private var overallRating: Double {
-        spotViewModel.getOverallRatingString(for: spot).isEmpty ? 0.0 : Double(spotViewModel.getOverallRatingString(for: spot)) ?? 0.0
+        // Create a temporary SpotViewModel to access rating calculation methods
+        let tempViewModel = SpotViewModel()
+        return tempViewModel.calculateOverallRating(for: spot)
     }
-    
-    private var spotViewModel = SpotViewModel()
     
     public var body: some View {
         VStack(alignment: .leading, spacing: ThemeManager.Spacing.sm) {
@@ -215,7 +253,7 @@ public struct SpotListRowView: View {
                 Spacer()
                 
                 VStack(alignment: .trailing, spacing: 4) {
-                    Text(spotViewModel.formatDistance(distance))
+                    Text(SpotViewModel().formatDistance(distance))
                         .font(ThemeManager.SwiftUIFonts.caption)
                         .foregroundColor(ThemeManager.SwiftUIColors.mocha.opacity(0.7))
                     
@@ -295,7 +333,7 @@ public struct SpotListRowView: View {
      * VoiceOver accessibility label
      */
     private var accessibilityLabel: String {
-        let distanceText = spotViewModel.formatDistance(distance)
+        let distanceText = SpotViewModel().formatDistance(distance)
         let ratingText = String(format: "%.1f stars", overallRating)
         let wifiText = "\(Int(spot.wifiRating)) out of 5 WiFi"
         let noiseText = "\(spot.noiseRating) noise level"

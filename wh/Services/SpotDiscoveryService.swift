@@ -72,6 +72,9 @@ class SpotDiscoveryService: ObservableObject {
             // Cache existing spots to avoid redundant queries
             existingSpotsCache = await checkExistingSpots(near: location, radius: searchRadius)
             
+            // Log context state
+            logger.info("Context has \(self.existingSpotsCache.count) spots")
+            
             if !existingSpotsCache.isEmpty {
                 logger.info("Found \(self.existingSpotsCache.count) existing spots within radius")
                 await updateDiscoveryState(progress: "Checking for new and stale spots...")
@@ -99,36 +102,28 @@ class SpotDiscoveryService: ObservableObject {
     // MARK: - Core Data Check
     
     /**
-     * Checks for existing spots within the specified radius with optimized Core Data querying
-     * Uses bounding box for efficient lat/long queries within 20 miles
-     * Returns all spots regardless of lastSeeded date for comprehensive checking
+     * Checks for existing spots using PersistenceController.shared.container.viewContext
+     * Queries all spots and returns matches on name.lowercased() + address.lowercased() 
+     * or lat/long proximity < 100m. Caches results to avoid redundant calls.
      */
     private func checkExistingSpots(near location: CLLocation, radius: Double) async -> [Spot] {
-        let context = persistenceController.container.viewContext
+        let context = PersistenceController.shared.container.viewContext
         let request: NSFetchRequest<Spot> = Spot.fetchRequest()
         
-        // Create a bounding box for efficient querying (20 miles)
-        let latRange = radius / 111000.0 // Rough conversion to degrees
-        let lngRange = radius / (111000.0 * cos(location.coordinate.latitude * .pi / 180))
-        
-        let minLat = location.coordinate.latitude - latRange
-        let maxLat = location.coordinate.latitude + latRange
-        let minLng = location.coordinate.longitude - lngRange
-        let maxLng = location.coordinate.longitude + lngRange
-        
-        request.predicate = NSPredicate(
-            format: "latitude >= %f AND latitude <= %f AND longitude >= %f AND longitude <= %f",
-            minLat, maxLat, minLng, maxLng
-        )
-        
+        // Query all spots (no predicate for comprehensive checking)
         do {
-            let spots = try context.fetch(request)
-            // Filter by actual distance to get precise results
-            let nearbySpots = spots.filter { spot in
+            let allSpots = try context.fetch(request)
+            
+            // Log context state
+            logger.info("Context has \(allSpots.count) spots")
+            
+            // Filter by proximity (< 100m) for efficient matching
+            let nearbySpots = allSpots.filter { spot in
                 let spotLocation = CLLocation(latitude: spot.latitude, longitude: spot.longitude)
-                return location.distance(from: spotLocation) <= radius
+                return location.distance(from: spotLocation) < 100.0
             }
-            logger.info("Found \(nearbySpots.count) existing spots within radius")
+            
+            logger.info("Found \(nearbySpots.count) existing spots within 100m proximity")
             return nearbySpots
         } catch {
             logger.error("Failed to fetch existing spots: \(error.localizedDescription)")
@@ -138,7 +133,8 @@ class SpotDiscoveryService: ObservableObject {
     }
     
     /**
-     * Checks if a spot matches existing spots by name+address or proximity
+     * Checks if a spot matches existing spots by name.lowercased() + address.lowercased() 
+     * or lat/long proximity < 100m
      * - Parameter mapItem: The MKMapItem to check for matches
      * - Returns: Matching existing spot if found, nil otherwise
      */
@@ -147,11 +143,11 @@ class SpotDiscoveryService: ObservableObject {
         let address = mapItem.placemark.title ?? "Unknown Address"
         let coordinate = mapItem.placemark.coordinate
         
-        // Create composite key for exact matching
+        // Create composite key for exact matching (name.lowercased() + address.lowercased())
         let compositeKey = "\(name.lowercased().trimmingCharacters(in: .whitespacesAndNewlines))|\(address.lowercased().trimmingCharacters(in: .whitespacesAndNewlines))"
         
         for existingSpot in existingSpotsCache {
-            // Check composite key match
+            // Check composite key match (name.lowercased() + address.lowercased())
             let existingCompositeKey = "\(existingSpot.name.lowercased().trimmingCharacters(in: .whitespacesAndNewlines))|\(existingSpot.address.lowercased().trimmingCharacters(in: .whitespacesAndNewlines))"
             
             if compositeKey == existingCompositeKey {
@@ -159,7 +155,7 @@ class SpotDiscoveryService: ObservableObject {
                 return existingSpot
             }
             
-            // Check proximity match (within 100 meters)
+            // Check proximity match (lat/long proximity < 100m)
             let existingLocation = CLLocation(latitude: existingSpot.latitude, longitude: existingSpot.longitude)
             let newLocation = CLLocation(latitude: coordinate.latitude, longitude: coordinate.longitude)
             let distance = existingLocation.distance(from: newLocation)
@@ -219,7 +215,7 @@ class SpotDiscoveryService: ObservableObject {
         if allMapItems.isEmpty {
             logger.info("No new or stale spots to process")
             await updateDiscoveryState(progress: "No new spots added")
-            errorMessage = "No new spots added - all locations are up to date"
+            errorMessage = "No new spots added"
             return existingSpotsCache
         }
         
@@ -278,7 +274,8 @@ class SpotDiscoveryService: ObservableObject {
     
     /**
      * Enriches map items with AI-generated data and creates/updates Spot entities
-     * Only calls Grok API for new or stale spots
+     * Batches Grok API calls (10 spots per request, max 2 concurrent) to reduce latency.
+     * Only calls Grok API for new or stale spots.
      */
     private func enrichAndCreateSpots(from mapItems: [MKMapItem]) async throws -> [Spot] {
         guard let apiKey = getGrokAPIKey(), !apiKey.isEmpty else {
@@ -287,29 +284,105 @@ class SpotDiscoveryService: ObservableObject {
         }
         
         var enrichedSpots: [Spot] = []
-        let batchSize = 5 // Process in small batches to avoid overwhelming the API
+        let batchSize = 10 // 10 spots per request
+        let maxConcurrent = 2 // Max 2 concurrent requests
         
-        for (index, mapItem) in mapItems.enumerated() {
-            let name = mapItem.name ?? "Unknown Location"
-            let _ = mapItem.placemark.title ?? "Unknown Address"
+        // Create batches
+        let batches = stride(from: 0, to: mapItems.count, by: batchSize).map { batchStart in
+            let batchEnd = min(batchStart + batchSize, mapItems.count)
+            return Array(mapItems[batchStart..<batchEnd])
+        }
+        
+        // Process batches with max 2 concurrent requests
+        await withTaskGroup(of: Result<[Spot], Error>.self) { group in
+            var activeTasks = 0
+            var batchIndex = 0
             
-            await updateDiscoveryState(progress: "Enriching location \(index + 1)/\(mapItems.count)...")
-            
-            do {
-                let spot = try await enrichSingleSpot(mapItem: mapItem, apiKey: apiKey)
-                enrichedSpots.append(spot)
-                
-                // Batch processing delay
-                if (index + 1) % batchSize == 0 {
-                    try await Task.sleep(nanoseconds: 1_000_000_000) // 1 second delay between batches
+            // Start initial tasks (up to maxConcurrent)
+            while activeTasks < maxConcurrent && batchIndex < batches.count {
+                let batch = batches[batchIndex]
+                let currentBatchIndex = batchIndex
+                group.addTask {
+                    await self.updateDiscoveryState(progress: "Enriching batch \(currentBatchIndex + 1)/\(batches.count)...")
+                    
+                    do {
+                        return .success(try await self.enrichBatchSpots(batch, apiKey: apiKey))
+                    } catch {
+                        self.logger.error("Failed to enrich batch \(currentBatchIndex + 1): \(error.localizedDescription)")
+                        Task { @MainActor in
+                            self.errorMessage = "Failed to enrich batch: \(error.localizedDescription)"
+                        }
+                        
+                        // Create spots with defaults if batch API fails
+                        do {
+                            var fallbackSpots: [Spot] = []
+                            for mapItem in batch {
+                                let defaultSpot = try await self.createSpotWithDefaults(mapItem: mapItem)
+                                fallbackSpots.append(defaultSpot)
+                            }
+                            return .success(fallbackSpots)
+                        } catch {
+                            return .failure(error)
+                        }
+                    }
                 }
-                
-            } catch {
-                logger.error("Failed to enrich spot \(name): \(error.localizedDescription)")
-                errorMessage = "Failed to enrich spot: \(error.localizedDescription)"
-                // Create spot with defaults if API fails
-                let defaultSpot = try await createSpotWithDefaults(mapItem: mapItem)
-                enrichedSpots.append(defaultSpot)
+                activeTasks += 1
+                batchIndex += 1
+            }
+            
+            // Process remaining batches as tasks complete
+            while batchIndex < batches.count {
+                if let result = await group.next() {
+                    switch result {
+                    case .success(let batchSpots):
+                        enrichedSpots.append(contentsOf: batchSpots)
+                    case .failure(let error):
+                        logger.error("Batch processing failed: \(error.localizedDescription)")
+                    }
+                    activeTasks -= 1
+                    
+                    // Start next batch if available
+                    if batchIndex < batches.count {
+                        let batch = batches[batchIndex]
+                        let currentBatchIndex = batchIndex
+                        group.addTask {
+                            await self.updateDiscoveryState(progress: "Enriching batch \(currentBatchIndex + 1)/\(batches.count)...")
+                            
+                            do {
+                                return .success(try await self.enrichBatchSpots(batch, apiKey: apiKey))
+                            } catch {
+                                self.logger.error("Failed to enrich batch \(currentBatchIndex + 1): \(error.localizedDescription)")
+                                Task { @MainActor in
+                                    self.errorMessage = "Failed to enrich batch: \(error.localizedDescription)"
+                                }
+                                
+                                // Create spots with defaults if batch API fails
+                                do {
+                                    var fallbackSpots: [Spot] = []
+                                    for mapItem in batch {
+                                        let defaultSpot = try await self.createSpotWithDefaults(mapItem: mapItem)
+                                        fallbackSpots.append(defaultSpot)
+                                    }
+                                    return .success(fallbackSpots)
+                                } catch {
+                                    return .failure(error)
+                                }
+                            }
+                        }
+                        activeTasks += 1
+                        batchIndex += 1
+                    }
+                }
+            }
+            
+            // Collect remaining results
+            for await result in group {
+                switch result {
+                case .success(let batchSpots):
+                    enrichedSpots.append(contentsOf: batchSpots)
+                case .failure(let error):
+                    logger.error("Batch processing failed: \(error.localizedDescription)")
+                }
             }
         }
         
@@ -319,6 +392,70 @@ class SpotDiscoveryService: ObservableObject {
         
         await updateDiscoveredCount(deduplicatedSpots.count)
         return deduplicatedSpots
+    }
+    
+    /**
+     * Enriches a batch of spots using the Grok API
+     * Processes up to 10 spots in a single API call to reduce latency
+     */
+    private func enrichBatchSpots(_ mapItems: [MKMapItem], apiKey: String) async throws -> [Spot] {
+        let spotDescriptions = mapItems.map { mapItem in
+            let name = mapItem.name ?? "Unknown Location"
+            let address = mapItem.placemark.title ?? "Unknown Address"
+            return "\(name) at \(address)"
+        }.joined(separator: ", ")
+        
+        let prompt = """
+        For these locations: \(spotDescriptions), estimate WiFi rating (1-5 stars), noise level (Low/Medium/High), plugs (Yes/No), and a short tip for each. Respond in JSON array format: [{"name": "Location Name", "wifi": number, "noise": string, "plugs": bool, "tip": string}, ...].
+        """
+        
+        let requestBody = GrokRequest(
+            model: "grok-4-fast-non-reasoning",
+            messages: [
+                GrokMessage(role: "user", content: prompt)
+            ],
+            maxTokens: 500, // Increased for batch processing
+            temperature: 0.3
+        )
+        
+        let enrichedData = try await callGrokAPI(requestBody: requestBody, apiKey: apiKey)
+        
+        // Parse batch response and create spots
+        var spots: [Spot] = []
+        if let content = enrichedData.choices.first?.message.content,
+           let data = content.data(using: .utf8) {
+            do {
+                let batchData = try JSONDecoder().decode([BatchSpotData].self, from: data)
+                
+                // Match batch data to map items by name
+                for mapItem in mapItems {
+                    let name = mapItem.name ?? "Unknown Location"
+                    if let spotData = batchData.first(where: { $0.name.lowercased() == name.lowercased() }) {
+                        let spot = createSpotFromMapItem(mapItem: mapItem, batchData: spotData)
+                        spots.append(spot)
+                    } else {
+                        // Fallback to default if no match found
+                        let defaultSpot = try await createSpotWithDefaults(mapItem: mapItem)
+                        spots.append(defaultSpot)
+                    }
+                }
+            } catch {
+                logger.warning("Failed to parse batch enriched data, using defaults: \(error.localizedDescription)")
+                // Fallback to individual processing
+                for mapItem in mapItems {
+                    let defaultSpot = try await createSpotWithDefaults(mapItem: mapItem)
+                    spots.append(defaultSpot)
+                }
+            }
+        } else {
+            // Fallback to defaults if no content
+            for mapItem in mapItems {
+                let defaultSpot = try await createSpotWithDefaults(mapItem: mapItem)
+                spots.append(defaultSpot)
+            }
+        }
+        
+        return spots
     }
     
     /**
@@ -369,7 +506,13 @@ class SpotDiscoveryService: ObservableObject {
         }
         
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
+            // Configure URLSession with timeout
+            let config = URLSessionConfiguration.default
+            config.timeoutIntervalForRequest = 30.0
+            config.timeoutIntervalForResource = 60.0
+            let session = URLSession(configuration: config)
+            
+            let (data, response) = try await session.data(for: request)
             
             guard let httpResponse = response as? HTTPURLResponse else {
                 throw SpotDiscoveryError.invalidResponse
@@ -433,6 +576,31 @@ class SpotDiscoveryService: ObservableObject {
     }
     
     /**
+     * Creates a Spot entity from map item and batch data
+     */
+    private func createSpotFromMapItem(mapItem: MKMapItem, batchData: BatchSpotData) -> Spot {
+        let context = persistenceController.container.viewContext
+        let spot = Spot(context: context)
+        
+        spot.name = mapItem.name ?? "Unknown Location"
+        spot.address = mapItem.placemark.title ?? "Unknown Address"
+        spot.latitude = mapItem.placemark.coordinate.latitude
+        spot.longitude = mapItem.placemark.coordinate.longitude
+        spot.lastModified = Date()
+        spot.lastSeeded = Date()
+        spot.cloudKitRecordID = UUID().uuidString
+        spot.markAsModified()
+        
+        // Use batch data
+        spot.wifiRating = Int16(batchData.wifi)
+        spot.noiseRating = batchData.noise
+        spot.outlets = batchData.plugs
+        spot.tips = batchData.tip
+        
+        return spot
+    }
+    
+    /**
      * Creates spots with default values when API fails
      */
     private func createSpotsWithDefaults(from mapItems: [MKMapItem]) async throws -> [Spot] {
@@ -491,33 +659,33 @@ class SpotDiscoveryService: ObservableObject {
     private func getGrokAPIKey() -> String? {
         // Primary: Get from environment variable (from Secrets.xcconfig)
         if let apiKey = ProcessInfo.processInfo.environment["GROK_API_KEY"], !apiKey.isEmpty {
+            logger.info("Found Grok API key from environment variable")
             return apiKey
         }
         
         // Fallback: Get from Info.plist (from build configuration)
         if let apiKey = Bundle.main.object(forInfoDictionaryKey: "GROK_API_KEY") as? String, !apiKey.isEmpty {
+            logger.info("Found Grok API key from Info.plist")
             return apiKey
         }
         
-        // For development: Use placeholder (replace with actual key for testing)
-        #if DEBUG
-        return "YOUR_GROK_API_KEY_HERE"
-        #else
+        logger.warning("GROK_API_KEY not found in environment or Info.plist")
         return nil
-        #endif
     }
     
     /**
      * Deduplicates spots and updates existing stale spots
-     * Updates existing spots if lastSeeded > 7 days, otherwise skips
+     * Updates existing spots (wifiRating, noiseRating, outlets, tips, lastSeeded) 
+     * if lastSeeded > 7 days, otherwise skips
      */
     private func deduplicateSpots(_ spots: [Spot]) -> [Spot] {
         var seenKeys: Set<String> = []
         var deduplicated: [Spot] = []
         let sevenDaysAgo = Calendar.current.date(byAdding: .day, value: -7, to: Date()) ?? Date()
+        var updatedExistingCount = 0
         
         for spot in spots {
-            // Create composite key for exact matching
+            // Create composite key for exact matching (name.lowercased() + address.lowercased())
             let compositeKey = "\(spot.name.lowercased().trimmingCharacters(in: .whitespacesAndNewlines))|\(spot.address.lowercased().trimmingCharacters(in: .whitespacesAndNewlines))"
             
             // Check for exact duplicate in current batch
@@ -526,13 +694,13 @@ class SpotDiscoveryService: ObservableObject {
                 continue
             }
             
-            // Check if we should update an existing spot
+            // Check if we should update an existing spot (lastSeeded > 7 days)
             var shouldUpdate = false
             for existingSpot in existingSpotsCache {
                 let existingCompositeKey = "\(existingSpot.name.lowercased().trimmingCharacters(in: .whitespacesAndNewlines))|\(existingSpot.address.lowercased().trimmingCharacters(in: .whitespacesAndNewlines))"
                 
                 if compositeKey == existingCompositeKey && existingSpot.lastSeeded < sevenDaysAgo {
-                    // Update existing stale spot
+                    // Update existing stale spot (wifiRating, noiseRating, outlets, tips, lastSeeded)
                     logger.info("Updating stale spot: \(spot.name) at \(spot.address)")
                     existingSpot.wifiRating = spot.wifiRating
                     existingSpot.noiseRating = spot.noiseRating
@@ -542,15 +710,20 @@ class SpotDiscoveryService: ObservableObject {
                     existingSpot.lastModified = Date()
                     existingSpot.markAsModified()
                     shouldUpdate = true
+                    updatedExistingCount += 1
+                    break
+                } else if compositeKey == existingCompositeKey {
+                    logger.info("Skipping fresh spot (lastSeeded < 7 days): \(spot.name) at \(spot.address)")
+                    shouldUpdate = true
                     break
                 }
             }
             
             if shouldUpdate {
-                continue // Skip adding to deduplicated list since we updated existing
+                continue // Skip adding to deduplicated list since we updated existing or skipped fresh
             }
             
-            // Check for proximity duplicate (within 100 meters)
+            // Check for proximity duplicate (lat/long proximity < 100m)
             var isProximityDuplicate = false
             for existingSpot in deduplicated {
                 let existingLocation = CLLocation(latitude: existingSpot.latitude, longitude: existingSpot.longitude)
@@ -570,7 +743,7 @@ class SpotDiscoveryService: ObservableObject {
             }
         }
         
-        logger.info("Deduplicated \(spots.count) spots to \(deduplicated.count) (updated existing stale spots)")
+        logger.info("Deduplicated \(spots.count) spots to \(deduplicated.count) (updated \(updatedExistingCount) existing stale spots)")
         return deduplicated
     }
     
@@ -642,6 +815,17 @@ private struct GrokChoice: Codable {
  * Spot enrichment data model
  */
 private struct SpotData: Codable {
+    let wifi: Int
+    let noise: String
+    let plugs: Bool
+    let tip: String
+}
+
+/**
+ * Batch spot enrichment data model
+ */
+private struct BatchSpotData: Codable {
+    let name: String
     let wifi: Int
     let noise: String
     let plugs: Bool

@@ -9,11 +9,13 @@
 import SwiftUI
 import CoreData
 import CoreLocation
+import OSLog
 
 /**
  * ContentView provides the main TabView navigation for WorkHaven.
  * Features tab-based navigation between spots discovery and settings.
  * Uses ThemeManager for consistent styling and includes accessibility support.
+ * Manages location services and spot loading with intelligent fallback handling.
  */
 struct ContentView: View {
     
@@ -26,26 +28,33 @@ struct ContentView: View {
     // Fallback location (San Francisco) if current location is unavailable
     private let fallbackLocation = CLLocation(latitude: 37.7749, longitude: -122.4194)
     
+    // Logger for debugging
+    private let logger = Logger(subsystem: "com.nextsizzle.wh", category: "ContentView")
+    
+    // Track if initial load has been performed to avoid redundant calls
+    @State private var hasPerformedInitialLoad = false
+    
+    // Alert state for location errors
+    @State private var showingLocationError = false
+    
     // MARK: - Body
     
     var body: some View {
         TabView {
-            // Spots Tab
+            // MARK: - Spots Tab
             SpotListView()
                 .environment(\.managedObjectContext, viewContext)
                 .tabItem {
-                    Image(systemName: "mappin.circle")
-                    Text("Spots")
+                    Label("Spots", systemImage: "mappin.circle")
                 }
                 .accessibilityLabel("Spots tab")
                 .tag(0)
             
-            // Settings Tab
+            // MARK: - Settings Tab
             SettingsView()
                 .environment(\.managedObjectContext, viewContext)
                 .tabItem {
-                    Image(systemName: "gear")
-                    Text("Settings")
+                    Label("Settings", systemImage: "gear")
                 }
                 .accessibilityLabel("Settings tab")
                 .tag(1)
@@ -55,24 +64,51 @@ struct ContentView: View {
             loadSpotsIfNeeded()
         }
         .onChange(of: locationService.currentLocation) { newLocation in
-            if let location = newLocation {
+            // Only reload if we have a new location and initial load was performed
+            if let location = newLocation, hasPerformedInitialLoad {
+                logger.info("Location changed, reloading spots")
                 Task {
                     await spotViewModel.loadSpots(near: location)
                 }
             }
         }
+        .onChange(of: locationService.errorMessage) { errorMessage in
+            // Show alert if location service has an error
+            if errorMessage != nil {
+                showingLocationError = true
+            }
+        }
+        .alert("Location Error", isPresented: $showingLocationError) {
+            Button("OK", role: .cancel) {
+                locationService.clearError()
+            }
+            .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+        } message: {
+            Text(locationService.errorMessage ?? "Location services are unavailable")
+                .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+        }
+        .background(ThemeManager.SwiftUIColors.latte)
     }
     
     // MARK: - Methods
     
     /**
      * Loads spots using current location or fallback location
+     * Uses Task to avoid redundant calls and ensures proper async handling
      */
     private func loadSpotsIfNeeded() {
+        // Prevent redundant calls
+        guard !hasPerformedInitialLoad else {
+            logger.debug("Initial load already performed, skipping")
+            return
+        }
+        
         let location = locationService.currentLocation ?? fallbackLocation
+        logger.info("Loading spots with location: \(location.coordinate.latitude), \(location.coordinate.longitude)")
         
         Task {
             await spotViewModel.loadSpots(near: location)
+            hasPerformedInitialLoad = true
         }
     }
 }
