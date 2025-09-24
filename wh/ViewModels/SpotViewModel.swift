@@ -231,32 +231,32 @@ class SpotViewModel: ObservableObject {
         
         logger.info("Starting spot discovery process")
         
-        // Start discovery and monitor progress
-        let discoveryTask = Task {
-            await spotDiscoveryService.discoverSpots(near: near, radius: searchRadius)
-        }
-        
-        // Monitor discovery progress
-        while !discoveryTask.isCancelled {
-            discoveryProgress = spotDiscoveryService.discoveryProgress
-            isSeeding = spotDiscoveryService.isDiscovering
-            
-            // If discovery is complete, break the loop
-            if !spotDiscoveryService.isDiscovering {
-                break
+        // Start monitoring discovery progress
+        let progressTask = Task {
+            while spotDiscoveryService.isDiscovering {
+                discoveryProgress = spotDiscoveryService.discoveryProgress
+                try? await Task.sleep(nanoseconds: 200_000_000) // 0.2 seconds
             }
-            
-            // Small delay to avoid excessive updates
-            try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
         }
         
-        let discoveredSpots = await discoveryTask.value
-        
-        // Sort spots by distance and rating
-        let sortedSpots = sortSpots(discoveredSpots, from: near)
-        
-        spots = sortedSpots
-        logger.info("Successfully loaded \(sortedSpots.count) spots")
+        do {
+            // Start discovery
+            let discoveredSpots = await spotDiscoveryService.discoverSpots(near: near, radius: searchRadius)
+            
+            // Cancel progress monitoring
+            progressTask.cancel()
+            
+            // Sort spots by distance and rating
+            let sortedSpots = sortSpots(discoveredSpots, from: near)
+            
+            spots = sortedSpots
+            logger.info("Successfully loaded \(sortedSpots.count) spots")
+            
+        } catch {
+            logger.error("Discovery failed: \(error.localizedDescription)")
+            errorMessage = "Discovery failed: \(error.localizedDescription)"
+            progressTask.cancel()
+        }
         
         isSeeding = false
         discoveryProgress = ""
