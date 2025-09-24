@@ -415,6 +415,11 @@ class SpotDiscoveryService: ObservableObject {
             return apiKey
         }
         
+        // Fallback: Get from Info.plist (from build configuration)
+        if let apiKey = Bundle.main.object(forInfoDictionaryKey: "GROK_API_KEY") as? String, !apiKey.isEmpty {
+            return apiKey
+        }
+        
         return nil
     }
     
