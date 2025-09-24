@@ -6,9 +6,6 @@
 	objectVersion = 77;
 	objects = {
 
-/* Begin PBXBuildFile section */
-/* End PBXBuildFile section */
-
 /* Begin PBXContainerItemProxy section */
 		5BF796072E837450002BEB90 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -99,7 +96,6 @@
 		5BF7970C2E838730002BEB90 /* Recovered References */ = {
 			isa = PBXGroup;
 			children = (
-				5BF796302E837450002BEB90 /* wh/WorkHaven.xcdatamodeld */,
 			);
 			name = "Recovered References";
 			sourceTree = "<group>";
@@ -223,8 +219,8 @@
 		5BF795F02E83744E002BEB90 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
-                        files = (
-                        );
+			files = (
+			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		5BF796042E837450002BEB90 /* Resources */ = {
@@ -291,15 +287,15 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = C73RKNC5RM;
 				ENABLE_PREVIEWS = YES;
-				GENERATE_INFOPLIST_FILE = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = WorkHaven;
 				INFOPLIST_KEY_NSLocationAlwaysAndWhenInUseUsageDescription = "WorkHaven needs location access to find nearby work spots and discover new locations for you.";
 				INFOPLIST_KEY_NSLocationAlwaysUsageDescription = "WorkHaven needs location access for geofencing features to notify you about nearby work spots.";
-                                INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "WorkHaven needs location access to find nearby work spots and discover new locations for you.";            
-                                INFOPLIST_KEY_UIBackgroundModes = "remote-notification";
-                                INFOPLIST_KEY_GROK_API_KEY = "$(GROK_API_KEY)";
-                                INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "WorkHaven needs location access to find nearby work spots and discover new locations for you.";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UIBackgroundModes = "remote-notification";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
@@ -326,15 +322,15 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = C73RKNC5RM;
 				ENABLE_PREVIEWS = YES;
-				GENERATE_INFOPLIST_FILE = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = WorkHaven;
 				INFOPLIST_KEY_NSLocationAlwaysAndWhenInUseUsageDescription = "WorkHaven needs location access to find nearby work spots and discover new locations for you.";
 				INFOPLIST_KEY_NSLocationAlwaysUsageDescription = "WorkHaven needs location access for geofencing features to notify you about nearby work spots.";
-                                INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "WorkHaven needs location access to find nearby work spots and discover new locations for you.";            
-                                INFOPLIST_KEY_UIBackgroundModes = "remote-notification";
-                                INFOPLIST_KEY_GROK_API_KEY = "$(GROK_API_KEY)";
-                                INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "WorkHaven needs location access to find nearby work spots and discover new locations for you.";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UIBackgroundModes = "remote-notification";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
@@ -479,7 +475,8 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = C73RKNC5RM;
-				GENERATE_INFOPLIST_FILE = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 18.5;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.nextsizzle.whTests;
@@ -498,7 +495,8 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = C73RKNC5RM;
-				GENERATE_INFOPLIST_FILE = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 18.5;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.nextsizzle.whTests;
@@ -516,7 +514,8 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = C73RKNC5RM;
-				GENERATE_INFOPLIST_FILE = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Info.plist;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.nextsizzle.whUITests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -533,7 +532,8 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = C73RKNC5RM;
-				GENERATE_INFOPLIST_FILE = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Info.plist;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.nextsizzle.whUITests;
 				PRODUCT_NAME = "$(TARGET_NAME)";

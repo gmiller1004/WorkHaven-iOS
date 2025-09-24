@@ -91,6 +91,7 @@ iOSInjectionProject/
 
 # API Keys and Secrets
 wh/Secrets.xcconfig
+Info.plist
 *.xcconfig
 
 # Environment files
