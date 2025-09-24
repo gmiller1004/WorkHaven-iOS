@@ -11,6 +11,7 @@ import CoreLocation
 import MapKit
 import CoreData
 import OSLog
+import SwiftUI
 
 /**
  * SpotDiscoveryService discovers and enriches nearby work spots using MKLocalSearch
@@ -52,7 +53,7 @@ class SpotDiscoveryService: ObservableObject {
     // MARK: - Main Discovery Function
     
     /**
-     * Discovers work spots near a given location
+     * Discovers work spots near a given location with enhanced duplicate prevention
      * - Parameter location: The center point for discovery
      * - Parameter radius: Search radius in meters (default: 20 miles)
      * - Returns: Array of discovered Spot entities
@@ -69,8 +70,15 @@ class SpotDiscoveryService: ObservableObject {
             
             if !existingSpots.isEmpty {
                 logger.info("Found \(existingSpots.count) existing spots within radius")
-                await updateDiscoveryState(isDiscovering: false, progress: "Found existing spots")
-                return existingSpots
+                await updateDiscoveryState(progress: "Checking for new spots...")
+                
+                // Proceed with discovery but filter duplicates against existing spots
+                let discoveredSpots = try await performSpotDiscovery(near: location, radius: searchRadius)
+                
+                await updateDiscoveryState(isDiscovering: false, progress: "Discovery complete")
+                logger.info("Successfully discovered \(discoveredSpots.count) total spots (existing + new)")
+                
+                return discoveredSpots
             }
             
             // No existing spots found, proceed with discovery
@@ -94,6 +102,7 @@ class SpotDiscoveryService: ObservableObject {
     
     /**
      * Checks for existing spots within the specified radius
+     * Uses composite key (name + address) and proximity checking for accurate deduplication
      */
     private func checkExistingSpots(near location: CLLocation, radius: Double) async -> [Spot] {
         return await withCheckedContinuation { continuation in
@@ -131,32 +140,97 @@ class SpotDiscoveryService: ObservableObject {
         }
     }
     
+    /**
+     * Checks if a spot already exists using composite key and proximity
+     * - Parameter mapItem: The MKMapItem to check for duplicates
+     * - Parameter existingSpots: Array of existing spots to check against
+     * - Returns: True if a duplicate is found, false otherwise
+     */
+    private func isDuplicateSpot(mapItem: MKMapItem, existingSpots: [Spot]) -> Bool {
+        let name = mapItem.name ?? "Unknown Location"
+        let address = mapItem.placemark.title ?? "Unknown Address"
+        let coordinate = mapItem.placemark.coordinate
+        
+        // Create composite key for exact matching
+        let compositeKey = "\(name.lowercased().trimmingCharacters(in: .whitespacesAndNewlines))|\(address.lowercased().trimmingCharacters(in: .whitespacesAndNewlines))"
+        
+        for existingSpot in existingSpots {
+            // Check composite key match
+            let existingCompositeKey = "\(existingSpot.name.lowercased().trimmingCharacters(in: .whitespacesAndNewlines))|\(existingSpot.address.lowercased().trimmingCharacters(in: .whitespacesAndNewlines))"
+            
+            if compositeKey == existingCompositeKey {
+                self.logger.info("Found exact duplicate: \(name) at \(address)")
+                return true
+            }
+            
+            // Check proximity match (within 100 meters)
+            let existingLocation = CLLocation(latitude: existingSpot.latitude, longitude: existingSpot.longitude)
+            let newLocation = CLLocation(latitude: coordinate.latitude, longitude: coordinate.longitude)
+            let distance = existingLocation.distance(from: newLocation)
+            
+            if distance < 100.0 {
+                self.logger.info("Found proximity duplicate: \(name) at \(address) (distance: \(distance)m)")
+                return true
+            }
+        }
+        
+        return false
+    }
+    
     // MARK: - MKLocalSearch Implementation
     
     /**
      * Performs the actual spot discovery using MKLocalSearch
+     * Filters out duplicates before enrichment to prevent unnecessary API calls
      */
     private func performSpotDiscovery(near location: CLLocation, radius: Double) async throws -> [Spot] {
         var allMapItems: [MKMapItem] = []
+        
+        // Get existing spots for duplicate checking
+        let existingSpots = await checkExistingSpots(near: location, radius: radius)
         
         // Search each category
         for (index, category) in searchCategories.enumerated() {
             await updateDiscoveryState(progress: "Searching \(category)s... (\(index + 1)/\(searchCategories.count))")
             
             let mapItems = try await searchCategory(category, near: location, radius: radius)
-            allMapItems.append(contentsOf: mapItems)
+            
+            // Filter out duplicates before adding to allMapItems
+            let uniqueMapItems = mapItems.filter { mapItem in
+                !isDuplicateSpot(mapItem: mapItem, existingSpots: existingSpots)
+            }
+            
+            allMapItems.append(contentsOf: uniqueMapItems)
+            
+            // Log duplicate detection and show alert
+            let duplicateCount = mapItems.count - uniqueMapItems.count
+            if duplicateCount > 0 {
+                logger.info("Filtered out \(duplicateCount) duplicate \(category)s")
+                await showDuplicateAlert(duplicateCount: duplicateCount, category: category)
+            }
             
             // Small delay to avoid rate limiting
             try await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
         }
         
-        logger.info("Found \(allMapItems.count) total map items")
+        logger.info("Found \(allMapItems.count) unique map items (after duplicate filtering)")
+        
+        // If no new spots found, return existing spots
+        if allMapItems.isEmpty {
+            logger.info("No new spots to discover, returning existing spots")
+            await updateDiscoveryState(progress: "No new spots found")
+            return existingSpots
+        }
         
         // Enrich with Grok API and create Spot entities
         await updateDiscoveryState(progress: "Enriching locations with AI...")
         let enrichedSpots = try await enrichAndCreateSpots(from: allMapItems)
         
-        return enrichedSpots
+        // Combine existing and new spots
+        let allSpots = existingSpots + enrichedSpots
+        logger.info("Total spots after discovery: \(allSpots.count) (existing: \(existingSpots.count), new: \(enrichedSpots.count))")
+        
+        return allSpots
     }
     
     /**
@@ -429,16 +503,39 @@ class SpotDiscoveryService: ObservableObject {
     }
     
     /**
-     * Deduplicates spots by address
+     * Deduplicates spots using composite key (name + address) and proximity
+     * Uses Set with normalized composite keys for efficient duplicate detection
      */
     private func deduplicateSpots(_ spots: [Spot]) -> [Spot] {
-        var seenAddresses: Set<String> = []
+        var seenKeys: Set<String> = []
         var deduplicated: [Spot] = []
         
         for spot in spots {
-            let normalizedAddress = spot.address.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-            if !seenAddresses.contains(normalizedAddress) {
-                seenAddresses.insert(normalizedAddress)
+            // Create composite key for exact matching
+            let compositeKey = "\(spot.name.lowercased().trimmingCharacters(in: .whitespacesAndNewlines))|\(spot.address.lowercased().trimmingCharacters(in: .whitespacesAndNewlines))"
+            
+            // Check for exact duplicate
+            if seenKeys.contains(compositeKey) {
+                logger.info("Skipping exact duplicate: \(spot.name) at \(spot.address)")
+                continue
+            }
+            
+            // Check for proximity duplicate (within 100 meters)
+            var isProximityDuplicate = false
+            for existingSpot in deduplicated {
+                let existingLocation = CLLocation(latitude: existingSpot.latitude, longitude: existingSpot.longitude)
+                let newLocation = CLLocation(latitude: spot.latitude, longitude: spot.longitude)
+                let distance = existingLocation.distance(from: newLocation)
+                
+                if distance < 100.0 {
+                    logger.info("Skipping proximity duplicate: \(spot.name) at \(spot.address) (distance: \(distance)m from \(existingSpot.name))")
+                    isProximityDuplicate = true
+                    break
+                }
+            }
+            
+            if !isProximityDuplicate {
+                seenKeys.insert(compositeKey)
                 deduplicated.append(spot)
             }
         }
@@ -474,6 +571,19 @@ class SpotDiscoveryService: ObservableObject {
     @MainActor
     private func updateDiscoveredCount(_ count: Int) {
         self.discoveredSpotsCount = count
+    }
+    
+    /**
+     * Shows duplicate detection alert using ThemeManager colors
+     * - Parameter duplicateCount: Number of duplicates found
+     * - Parameter category: Category of spots being processed
+     */
+    @MainActor
+    private func showDuplicateAlert(duplicateCount: Int, category: String) {
+        if duplicateCount > 0 {
+            errorMessage = "Found \(duplicateCount) duplicate \(category)s - skipped to prevent duplicates"
+            logger.info("Duplicate alert: \(duplicateCount) \(category)s skipped")
+        }
     }
 }
 
