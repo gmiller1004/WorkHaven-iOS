@@ -9,387 +9,413 @@
 import Foundation
 import CoreLocation
 import CoreData
+import SwiftUI
 import OSLog
 
 /**
  * SpotViewModel manages spot data, seeding, and display logic for WorkHaven.
- * 
- * This view model provides:
- * - Spot data management with Core Data integration
- * - Automatic spot discovery and seeding based on location and time
- * - Intelligent sorting by distance and overall rating
- * - Error handling with user-friendly messages
- * - Theme integration for consistent UI styling
- * 
- * Usage:
- * - Initialize with @StateObject in SwiftUI views
- * - Call loadSpots(near:) to load and seed spots for a location
- * - Monitor @Published properties for UI updates
- * - Handle errors via errorMessage property
+ * Handles Core Data queries, spot discovery, intelligent sorting, and error management.
+ * Provides a clean interface between the UI and the underlying data services.
  */
 @MainActor
 class SpotViewModel: ObservableObject {
     
     // MARK: - Published Properties
     
-    /// Array of spots currently loaded and displayed
+    /// Array of discovered spots, sorted by distance and rating
     @Published var spots: [Spot] = []
     
-    /// Whether spot discovery/seeding is currently in progress
+    /// Indicates if spot discovery is currently in progress
     @Published var isSeeding: Bool = false
     
-    /// Error message to display to user, nil if no error
+    /// Error message for user feedback
     @Published var errorMessage: String?
     
     // MARK: - Private Properties
     
-    private let persistenceController = PersistenceController.shared
-    private let spotDiscoveryService = SpotDiscoveryService()
+    private let persistenceController: PersistenceController
+    private let spotDiscoveryService: SpotDiscoveryService
     private let logger = Logger(subsystem: "com.nextsizzle.wh", category: "SpotViewModel")
     
-    /// Maximum distance for spot queries (20 miles in meters)
-    private let maxDistance: Double = 32186.88 // 20 miles in meters
+    /// Maximum search radius in meters (20 miles)
+    private let searchRadius: Double = 32186.88 // 20 miles in meters
     
-    /// Maximum age for seeded spots before re-seeding (7 days)
-    private let maxSeededAge: TimeInterval = 7 * 24 * 60 * 60 // 7 days in seconds
+    /// Number of days after which spots should be refreshed
+    private let refreshThresholdDays: Int = 7
+    
+    // MARK: - Initialization
+    
+    /**
+     * Initializes the SpotViewModel with required dependencies
+     * - Parameter persistenceController: Core Data persistence controller
+     * - Parameter spotDiscoveryService: Service for discovering new spots
+     */
+    init(persistenceController: PersistenceController = .shared,
+         spotDiscoveryService: SpotDiscoveryService? = nil) {
+        self.persistenceController = persistenceController
+        self.spotDiscoveryService = spotDiscoveryService ?? SpotDiscoveryService()
+    }
     
     // MARK: - Public Methods
     
     /**
-     * Loads spots near the specified location
-     * 
-     * - Parameter location: The location to search around
-     * 
-     * This method:
-     * 1. Queries Core Data for existing spots within 20 miles
-     * 2. Checks if spots need re-seeding (none found or lastSeeded > 7 days)
-     * 3. Calls SpotDiscoveryService if re-seeding is needed
-     * 4. Sorts spots by distance and overall rating
-     * 5. Updates the spots array
+     * Loads spots near the specified location with intelligent caching and discovery
+     * - Parameter location: The center point for spot discovery
      */
     func loadSpots(near location: CLLocation) async {
-        logger.info("Loading spots near location: \(location.coordinate.latitude), \(location.coordinate.longitude)")
+        logger.info("Loading spots near \(location.coordinate.latitude), \(location.coordinate.longitude)")
         
         // Clear any previous errors
         errorMessage = nil
         
+        // First, check for existing spots in Core Data
         do {
-            // First, try to load existing spots from Core Data
-            let existingSpots = try await querySpots(near: location)
+            let existingSpots = try await fetchExistingSpots(near: location)
             
-            // Check if we need to seed new spots
-            let needsSeeding = shouldSeedSpots(existingSpots: existingSpots)
+            // Check if we need to refresh spots
+            let needsRefresh = shouldRefreshSpots(existingSpots)
             
-            if needsSeeding {
-                logger.info("Seeding new spots - existing: \(existingSpots.count), needs seeding: \(needsSeeding)")
-                await seedSpots(near: location)
+            if needsRefresh {
+                logger.info("Spots need refresh, discovering new spots")
+                await discoverNewSpots(near: location)
             } else {
-                logger.info("Using existing spots: \(existingSpots.count)")
-                spots = sortSpots(existingSpots, from: location)
+                logger.info("Using existing spots (\(existingSpots.count) found)")
+                spots = existingSpots
             }
             
         } catch {
             logger.error("Failed to load spots: \(error.localizedDescription)")
             errorMessage = "Failed to load spots: \(error.localizedDescription)"
-            spots = []
         }
     }
     
     /**
-     * Refreshes spots for the current location
-     * 
-     * - Parameter location: The location to refresh spots for
+     * Forces a refresh of spots by clearing cache and discovering new ones
+     * - Parameter location: The center point for spot discovery
      */
     func refreshSpots(near location: CLLocation) async {
-        logger.info("Refreshing spots near location")
-        await loadSpots(near: location)
-    }
-    
-    /**
-     * Clears all spots and error messages
-     */
-    func clearSpots() {
-        logger.info("Clearing all spots")
+        logger.info("Force refreshing spots near \(location.coordinate.latitude), \(location.coordinate.longitude)")
+        
+        // Clear existing spots
         spots = []
         errorMessage = nil
+        
+        await discoverNewSpots(near: location)
     }
     
     /**
-     * Gets the overall rating for a spot
-     * 
-     * - Parameter spot: The spot to calculate rating for
-     * - Returns: Overall rating from 0.0 to 5.0
+     * Clears all spots from the view model
      */
-    func getOverallRating(for spot: Spot) -> Double {
-        return calculateOverallRating(for: spot)
+    func clearSpots() {
+        spots = []
+        errorMessage = nil
+        logger.info("Cleared all spots from view model")
     }
     
     // MARK: - Private Methods
     
     /**
-     * Queries Core Data for spots within the specified distance
+     * Fetches existing spots from Core Data within the search radius
+     * - Parameter location: The center point for the search
+     * - Returns: Array of existing spots
      */
-    private func querySpots(near location: CLLocation) async throws -> [Spot] {
-        return try await withCheckedThrowingContinuation { continuation in
-            let context = persistenceController.container.viewContext
+    private func fetchExistingSpots(near location: CLLocation) async throws -> [Spot] {
+        let context = persistenceController.container.viewContext
+        let request: NSFetchRequest<Spot> = Spot.fetchRequest()
+        
+        // Create a bounding box for efficient querying
+        let latRange = searchRadius / 111000.0 // Rough conversion to degrees
+        let lngRange = searchRadius / (111000.0 * cos(location.coordinate.latitude * .pi / 180))
+        
+        let minLat = location.coordinate.latitude - latRange
+        let maxLat = location.coordinate.latitude + latRange
+        let minLng = location.coordinate.longitude - lngRange
+        let maxLng = location.coordinate.longitude + lngRange
+        
+        request.predicate = NSPredicate(
+            format: "latitude >= %f AND latitude <= %f AND longitude >= %f AND longitude <= %f",
+            minLat, maxLat, minLng, maxLng
+        )
+        
+        do {
+            let fetchedSpots = try context.fetch(request)
             
-            context.perform {
-                do {
-                    let request: NSFetchRequest<Spot> = Spot.fetchRequest()
-                    
-                    // Create a predicate to filter spots within the maximum distance
-                    // We'll fetch all spots and filter by distance in memory for accuracy
-                    let spots = try context.fetch(request)
-                    
-                    // Filter spots within the maximum distance
-                    let nearbySpots = spots.filter { spot in
-                        let spotLocation = CLLocation(latitude: spot.latitude, longitude: spot.longitude)
-                        return location.distance(from: spotLocation) <= self.maxDistance
-                    }
-                    
-                    continuation.resume(returning: nearbySpots)
-                } catch {
-                    continuation.resume(throwing: error)
-                }
+            // Filter by actual distance to get precise results
+            let nearbySpots = fetchedSpots.filter { spot in
+                let spotLocation = CLLocation(latitude: spot.latitude, longitude: spot.longitude)
+                return location.distance(from: spotLocation) <= searchRadius
             }
+            
+            logger.info("Fetched \(nearbySpots.count) existing spots from Core Data")
+            return nearbySpots
+            
+        } catch {
+            logger.error("Failed to fetch existing spots: \(error.localizedDescription)")
+            throw error
         }
     }
     
     /**
-     * Determines if spots need to be seeded based on existing data
+     * Determines if spots need to be refreshed based on age and availability
+     * - Parameter existingSpots: Array of existing spots
+     * - Returns: True if spots need refresh, false otherwise
      */
-    private func shouldSeedSpots(existingSpots: [Spot]) -> Bool {
-        // Seed if no spots found
+    private func shouldRefreshSpots(_ existingSpots: [Spot]) -> Bool {
+        // If no spots exist, we need to discover
         if existingSpots.isEmpty {
-            logger.info("No existing spots found, seeding required")
+            logger.info("No existing spots found, need to discover")
             return true
         }
         
-        // Check if any spot was seeded recently (within 7 days)
-        let now = Date()
-        let hasRecentSpots = existingSpots.contains { spot in
-            let timeSinceSeeded = now.timeIntervalSince(spot.lastSeeded)
-            return timeSinceSeeded <= maxSeededAge
+        // Check if any spots are older than the refresh threshold
+        let refreshThreshold = Calendar.current.date(byAdding: .day, value: -refreshThresholdDays, to: Date()) ?? Date()
+        
+        let needsRefresh = existingSpots.allSatisfy { spot in
+            spot.lastSeeded < refreshThreshold
         }
         
-        if !hasRecentSpots {
-            logger.info("No recently seeded spots found, re-seeding required")
-            return true
+        if needsRefresh {
+            logger.info("All spots are older than \(self.refreshThresholdDays) days, need to refresh")
+        } else {
+            logger.info("Spots are fresh, no refresh needed")
         }
         
-        logger.info("Recent spots found, no seeding required")
-        return false
+        return needsRefresh
     }
     
     /**
-     * Seeds new spots using SpotDiscoveryService
+     * Discovers new spots using the SpotDiscoveryService
+     * - Parameter location: The center point for spot discovery
      */
-    private func seedSpots(near location: CLLocation) async {
+    private func discoverNewSpots(near location: CLLocation) async {
         isSeeding = true
         errorMessage = nil
         
-        logger.info("Starting spot discovery and seeding")
-        let discoveredSpots = await spotDiscoveryService.discoverSpots(near: location)
+        logger.info("Starting spot discovery process")
+        let discoveredSpots = await spotDiscoveryService.discoverSpots(near: location, radius: searchRadius)
         
-        if discoveredSpots.isEmpty {
-            logger.warning("No spots discovered, trying existing spots as fallback")
-            errorMessage = "No new spots found, showing existing spots"
-            
-            // Try to load existing spots as fallback
-            do {
-                let existingSpots = try await querySpots(near: location)
-                spots = sortSpots(existingSpots, from: location)
-                logger.info("Loaded \(existingSpots.count) existing spots as fallback")
-            } catch {
-                logger.error("Failed to load existing spots as fallback: \(error.localizedDescription)")
-                errorMessage = "Failed to load spots: \(error.localizedDescription)"
-                spots = []
-            }
-        } else {
-            logger.info("Successfully discovered \(discoveredSpots.count) spots")
-            spots = sortSpots(discoveredSpots, from: location)
-        }
+        // Sort spots by distance and rating
+        let sortedSpots = sortSpots(discoveredSpots, from: location)
+        
+        spots = sortedSpots
+        logger.info("Successfully loaded \(sortedSpots.count) spots")
         
         isSeeding = false
     }
     
     /**
-     * Sorts spots by distance and overall rating
+     * Sorts spots by distance first, then by overall rating
+     * - Parameter spots: Array of spots to sort
+     * - Parameter userLocation: User's current location for distance calculation
+     * - Returns: Sorted array of spots
      */
-    private func sortSpots(_ spots: [Spot], from location: CLLocation) -> [Spot] {
+    private func sortSpots(_ spots: [Spot], from userLocation: CLLocation) -> [Spot] {
         return spots.sorted { spot1, spot2 in
             let location1 = CLLocation(latitude: spot1.latitude, longitude: spot1.longitude)
             let location2 = CLLocation(latitude: spot2.latitude, longitude: spot2.longitude)
             
-            let distance1 = location.distance(from: location1)
-            let distance2 = location.distance(from: location2)
+            let distance1 = userLocation.distance(from: location1)
+            let distance2 = userLocation.distance(from: location2)
             
-            let rating1 = calculateOverallRating(for: spot1)
-            let rating2 = calculateOverallRating(for: spot2)
-            
-            // Primary sort: distance (closer is better)
+            // First sort by distance (closer spots first)
             if abs(distance1 - distance2) > 100 { // 100 meter threshold
                 return distance1 < distance2
             }
             
-            // Secondary sort: overall rating (higher is better)
+            // If distances are similar, sort by overall rating
+            let rating1 = calculateOverallRating(for: spot1)
+            let rating2 = calculateOverallRating(for: spot2)
+            
             return rating1 > rating2
         }
     }
     
     /**
-     * Calculates the overall rating for a spot
-     * 
-     * Formula: 50% aggregate rating + 50% user rating average
-     * - Aggregate: (wifiRating/5 + noiseInverted + outlets) / 3
-     * - Noise: Low=5, Medium=3, High=1
-     * - Outlets: Yes=5, No=1
-     * - User ratings: Average of all user ratings for the spot
+     * Calculates the overall rating for a spot using the specified formula
+     * - Parameter spot: The spot to calculate rating for
+     * - Returns: Overall rating (0.0 to 5.0)
      */
     private func calculateOverallRating(for spot: Spot) -> Double {
         // Calculate aggregate rating (50% weight)
-        let wifiScore = Double(spot.wifiRating) / 5.0
-        
-        let noiseScore: Double
-        switch spot.noiseRating.lowercased() {
-        case "low":
-            noiseScore = 5.0
-        case "medium":
-            noiseScore = 3.0
-        case "high":
-            noiseScore = 1.0
-        default:
-            noiseScore = 3.0 // Default to medium
-        }
-        let noiseInverted = noiseScore / 5.0
-        
-        let outletsScore = spot.outlets ? 5.0 : 1.0
-        let outletsNormalized = outletsScore / 5.0
-        
-        let aggregateRating = (wifiScore + noiseInverted + outletsNormalized) / 3.0
+        let aggregateRating = calculateAggregateRating(for: spot)
         
         // Calculate user rating average (50% weight)
         let userRatingAverage = calculateUserRatingAverage(for: spot)
         
-        // Combine with 50/50 weighting
-        let overallRating = (aggregateRating * 0.5) + (userRatingAverage * 0.5)
+        // If no user ratings, fallback to aggregate rating
+        if userRatingAverage == 0 {
+            return aggregateRating
+        }
         
-        // Ensure rating is between 0.0 and 5.0
-        return max(0.0, min(5.0, overallRating))
+        // Combine with 50/50 weighting
+        return (aggregateRating * 0.5) + (userRatingAverage * 0.5)
+    }
+    
+    /**
+     * Calculates the aggregate rating based on WiFi, noise, and outlets
+     * - Parameter spot: The spot to calculate rating for
+     * - Returns: Aggregate rating (0.0 to 5.0)
+     */
+    private func calculateAggregateRating(for spot: Spot) -> Double {
+        // WiFi rating (normalized to 0-5 scale)
+        let wifiScore = Double(spot.wifiRating) / 5.0
+        
+        // Noise rating (Low=5, Medium=3, High=1, normalized to 0-5 scale)
+        let noiseScore: Double
+        switch spot.noiseRating.lowercased() {
+        case "low":
+            noiseScore = 5.0 / 5.0
+        case "medium":
+            noiseScore = 3.0 / 5.0
+        case "high":
+            noiseScore = 1.0 / 5.0
+        default:
+            noiseScore = 3.0 / 5.0 // Default to medium
+        }
+        
+        // Outlets rating (Yes=5, No=1, normalized to 0-5 scale)
+        let outletsScore = spot.outlets ? 5.0 / 5.0 : 1.0 / 5.0
+        
+        // Average of the three components
+        return (wifiScore + noiseScore + outletsScore) / 3.0
     }
     
     /**
      * Calculates the average user rating for a spot
+     * - Parameter spot: The spot to calculate rating for
+     * - Returns: Average user rating (0.0 to 5.0), or 0 if no ratings
      */
     private func calculateUserRatingAverage(for spot: Spot) -> Double {
-        guard let userRatings = spot.userRatings as? Set<UserRating>,
-              !userRatings.isEmpty else {
-            // No user ratings, return neutral score
-            return 2.5
+        guard let userRatings = spot.userRatings, userRatings.count > 0 else {
+            return 0.0
         }
         
-        let totalRating = userRatings.reduce(0.0) { total, rating in
-            let wifiScore = Double(rating.wifi) / 5.0
+        let totalRating = userRatings.reduce(into: 0.0) { sum, rating in
+            // Cast NSSet.Element to UserRating
+            guard let userRating = rating as? UserRating else { return }
+            
+            // Calculate individual user rating using same formula as aggregate
+            let wifiScore = Double(userRating.wifi) / 5.0
             
             let noiseScore: Double
-            switch rating.noise.lowercased() {
+            switch userRating.noise.lowercased() {
             case "low":
-                noiseScore = 5.0
+                noiseScore = 5.0 / 5.0
             case "medium":
-                noiseScore = 3.0
+                noiseScore = 3.0 / 5.0
             case "high":
-                noiseScore = 1.0
+                noiseScore = 1.0 / 5.0
             default:
-                noiseScore = 3.0
+                noiseScore = 3.0 / 5.0
             }
-            let noiseInverted = noiseScore / 5.0
             
-            let plugsScore = rating.plugs ? 5.0 : 1.0
-            let plugsNormalized = plugsScore / 5.0
+            let outletsScore = userRating.plugs ? 5.0 / 5.0 : 1.0 / 5.0
             
-            let userRating = (wifiScore + noiseInverted + plugsNormalized) / 3.0
-            return total + userRating
+            sum += (wifiScore + noiseScore + outletsScore) / 3.0
         }
         
         return totalRating / Double(userRatings.count)
     }
+    
+    // MARK: - Helper Methods
+    
+    /**
+     * Gets the distance from user location to a specific spot
+     * - Parameter spot: The spot to calculate distance to
+     * - Parameter userLocation: User's current location
+     * - Returns: Distance in meters
+     */
+    func distanceToSpot(_ spot: Spot, from userLocation: CLLocation) -> Double {
+        let spotLocation = CLLocation(latitude: spot.latitude, longitude: spot.longitude)
+        return userLocation.distance(from: spotLocation)
+    }
+    
+    /**
+     * Formats distance for display
+     * - Parameter distance: Distance in meters
+     * - Returns: Formatted distance string
+     */
+    func formatDistance(_ distance: Double) -> String {
+        if distance < 1000 {
+            return String(format: "%.0f m", distance)
+        } else {
+            let kilometers = distance / 1000
+            return String(format: "%.1f km", kilometers)
+        }
+    }
+    
+    /**
+     * Gets the overall rating for a spot as a display string
+     * - Parameter spot: The spot to get rating for
+     * - Returns: Formatted rating string
+     */
+    func getOverallRatingString(for spot: Spot) -> String {
+        let rating = calculateOverallRating(for: spot)
+        return String(format: "%.1f", rating)
+    }
+    
+    /**
+     * Gets the number of user ratings for a spot
+     * - Parameter spot: The spot to get rating count for
+     * - Returns: Number of user ratings
+     */
+    func getUserRatingCount(for spot: Spot) -> Int {
+        return spot.userRatings?.count ?? 0
+    }
+    
+    // MARK: - Error Handling
+    
+    /**
+     * Clears the current error message
+     */
+    func clearError() {
+        errorMessage = nil
+    }
+    
+    /**
+     * Sets an error message with ThemeManager styling
+     * - Parameter message: The error message to display
+     */
+    func setError(_ message: String) {
+        errorMessage = message
+        logger.error("SpotViewModel error: \(message)")
+    }
 }
 
-// MARK: - Convenience Extensions
+// MARK: - Debug Helpers
 
+#if DEBUG
 extension SpotViewModel {
     
     /**
-     * Gets spots within a specific radius
-     * 
-     * - Parameter radius: Radius in meters
-     * - Parameter from: Reference location
-     * - Returns: Array of spots within the radius
+     * Debug method to simulate spot loading
+     * - Parameter count: Number of spots to simulate
      */
-    func getSpotsWithin(radius: Double, from location: CLLocation) -> [Spot] {
-        return spots.filter { spot in
-            let spotLocation = CLLocation(latitude: spot.latitude, longitude: spot.longitude)
-            return location.distance(from: spotLocation) <= radius
-        }
+    func simulateSpots(count: Int = 5) {
+        logger.debug("Simulating \(count) spots for testing")
+        
+        // This would create mock spots in a real implementation
+        // For now, just log the simulation
+        spots = []
+        logger.debug("Simulated \(count) spots")
     }
     
     /**
-     * Gets spots with a minimum rating
-     * 
-     * - Parameter minRating: Minimum rating (0.0 to 5.0)
-     * - Returns: Array of spots meeting the minimum rating
+     * Debug method to test rating calculations
+     * - Parameter spot: Spot to test rating for
      */
-    func getSpotsWithRating(atLeast minRating: Double) -> [Spot] {
-        return spots.filter { spot in
-            calculateOverallRating(for: spot) >= minRating
-        }
-    }
-    
-    /**
-     * Gets the closest spot to a location
-     * 
-     * - Parameter location: Reference location
-     * - Returns: Closest spot, nil if no spots available
-     */
-    func getClosestSpot(to location: CLLocation) -> Spot? {
-        return spots.min { spot1, spot2 in
-            let location1 = CLLocation(latitude: spot1.latitude, longitude: spot1.longitude)
-            let location2 = CLLocation(latitude: spot2.latitude, longitude: spot2.longitude)
-            return location.distance(from: location1) < location.distance(from: location2)
-        }
-    }
-    
-    /**
-     * Gets spots by category (based on name/address patterns)
-     * 
-     * - Parameter category: Category to filter by
-     * - Returns: Array of spots matching the category
-     */
-    func getSpotsByCategory(_ category: String) -> [Spot] {
-        let categoryLower = category.lowercased()
-        return spots.filter { spot in
-            spot.name.lowercased().contains(categoryLower) ||
-            spot.address.lowercased().contains(categoryLower)
-        }
+    func debugRatingCalculation(for spot: Spot) {
+        let aggregateRating = calculateAggregateRating(for: spot)
+        let userRatingAverage = calculateUserRatingAverage(for: spot)
+        let overallRating = calculateOverallRating(for: spot)
+        
+        logger.debug("""
+        Rating calculation for \(spot.name):
+        - Aggregate: \(String(format: "%.2f", aggregateRating))
+        - User Average: \(String(format: "%.2f", userRatingAverage))
+        - Overall: \(String(format: "%.2f", overallRating))
+        - User Ratings Count: \(self.getUserRatingCount(for: spot))
+        """)
     }
 }
-
-// MARK: - Theme Integration
-
-extension SpotViewModel {
-    
-    /**
-     * Gets theme colors for UI styling
-     */
-    var themeColors: (mocha: String, latte: String) {
-        return (mocha: "#8B5E3C", latte: "#FFF8E7")
-    }
-    
-    /**
-     * Creates a styled error message for display
-     */
-    func getStyledErrorMessage() -> String? {
-        guard let error = errorMessage else { return nil }
-        return "⚠️ \(error)"
-    }
-}
+#endif
