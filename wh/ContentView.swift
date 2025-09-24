@@ -64,11 +64,20 @@ struct ContentView: View {
             loadSpotsIfNeeded()
         }
         .onChange(of: locationService.currentLocation) { newLocation in
-            // Only reload if we have a new location and initial load was performed
-            if let location = newLocation, hasPerformedInitialLoad {
-                logger.info("Location changed, reloading spots")
-                Task {
-                    await spotViewModel.loadSpots(near: location)
+            if let location = newLocation {
+                if hasPerformedInitialLoad {
+                    // Reload spots if location changed after initial load
+                    logger.info("Location changed, reloading spots")
+                    Task {
+                        await spotViewModel.loadSpots(near: location)
+                    }
+                } else {
+                    // Trigger initial load if location became available
+                    logger.info("Location became available, triggering initial load")
+                    Task {
+                        await spotViewModel.loadSpots(near: location)
+                        hasPerformedInitialLoad = true
+                    }
                 }
             }
         }
@@ -103,21 +112,27 @@ struct ContentView: View {
             return
         }
         
-        // Wait for location to be available or use fallback after a short delay
-        if locationService.currentLocation == nil {
-            logger.info("No user location available, waiting for location or using fallback")
-            // Wait a bit for location to be available, then proceed with fallback
+        // If we already have location, use it immediately
+        if let location = locationService.currentLocation {
+            logger.info("Loading spots with current location: \(location.coordinate.latitude), \(location.coordinate.longitude)")
             Task {
-                try await Task.sleep(nanoseconds: 2_000_000_000) // 2 seconds
-                let location = locationService.currentLocation ?? fallbackLocation
-                logger.info("Loading spots with location: \(location.coordinate.latitude), \(location.coordinate.longitude)")
                 await spotViewModel.loadSpots(near: location)
                 hasPerformedInitialLoad = true
             }
         } else {
-            let location = locationService.currentLocation!
-            logger.info("Loading spots with location: \(location.coordinate.latitude), \(location.coordinate.longitude)")
+            logger.info("No user location available, waiting for location or using fallback")
+            // Wait a bit for location to be available, then proceed with fallback
             Task {
+                try await Task.sleep(nanoseconds: 2_000_000_000) // 2 seconds
+                
+                // Check if initial load was already performed by onChange handler
+                guard !hasPerformedInitialLoad else {
+                    logger.debug("Initial load already performed by onChange handler, skipping")
+                    return
+                }
+                
+                let location = locationService.currentLocation ?? fallbackLocation
+                logger.info("Loading spots with location: \(location.coordinate.latitude), \(location.coordinate.longitude)")
                 await spotViewModel.loadSpots(near: location)
                 hasPerformedInitialLoad = true
             }
