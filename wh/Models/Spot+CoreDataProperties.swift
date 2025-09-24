@@ -50,6 +50,9 @@ extension Spot {
     /// Timestamp of when this spot was last modified
     @NSManaged public var lastModified: Date
     
+    /// Timestamp of when this spot was last seeded from discovery service
+    @NSManaged public var lastSeeded: Date
+    
     /// CloudKit record identifier for synchronization
     @NSManaged public var cloudKitRecordID: String
     

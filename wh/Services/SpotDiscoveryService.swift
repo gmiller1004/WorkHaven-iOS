@@ -47,6 +47,7 @@ class SpotDiscoveryService: ObservableObject {
     @Published var isDiscovering = false
     @Published var discoveryProgress: String = ""
     @Published var discoveredSpotsCount = 0
+    @Published var errorMessage: String?
     
     // MARK: - Main Discovery Function
     
@@ -84,6 +85,7 @@ class SpotDiscoveryService: ObservableObject {
         } catch {
             logger.error("Spot discovery failed: \(error.localizedDescription)")
             await updateDiscoveryState(isDiscovering: false, progress: "Discovery failed")
+            errorMessage = "Discovery failed: \(error.localizedDescription)"
             return []
         }
     }
@@ -122,6 +124,7 @@ class SpotDiscoveryService: ObservableObject {
                     continuation.resume(returning: nearbySpots)
                 } catch {
                     self.logger.error("Failed to fetch existing spots: \(error.localizedDescription)")
+                    self.errorMessage = "Failed to check existing spots: \(error.localizedDescription)"
                     continuation.resume(returning: [])
                 }
             }
@@ -174,6 +177,7 @@ class SpotDiscoveryService: ObservableObject {
             search.start { response, error in
                 if let error = error {
                     self.logger.error("MKLocalSearch failed for \(category): \(error.localizedDescription)")
+                    self.errorMessage = "Search failed for \(category): \(error.localizedDescription)"
                     continuation.resume(throwing: error)
                     return
                 }
@@ -223,6 +227,7 @@ class SpotDiscoveryService: ObservableObject {
                 
             } catch {
                 logger.error("Failed to enrich spot \(mapItem.name ?? "Unknown"): \(error.localizedDescription)")
+                errorMessage = "Failed to enrich spot: \(error.localizedDescription)"
                 // Create spot with defaults if API fails
                 let defaultSpot = try await createSpotWithDefaults(mapItem: mapItem)
                 enrichedSpots.append(defaultSpot)
@@ -324,6 +329,7 @@ class SpotDiscoveryService: ObservableObject {
         spot.latitude = mapItem.placemark.coordinate.latitude
         spot.longitude = mapItem.placemark.coordinate.longitude
         spot.lastModified = Date()
+        spot.lastSeeded = Date()
         spot.cloudKitRecordID = UUID().uuidString
         spot.markAsModified()
         
@@ -376,6 +382,7 @@ class SpotDiscoveryService: ObservableObject {
         spot.latitude = mapItem.placemark.coordinate.latitude
         spot.longitude = mapItem.placemark.coordinate.longitude
         spot.lastModified = Date()
+        spot.lastSeeded = Date()
         spot.cloudKitRecordID = UUID().uuidString
         spot.markAsModified()
         
@@ -397,34 +404,13 @@ class SpotDiscoveryService: ObservableObject {
     // MARK: - Utility Functions
     
     /**
-     * Gets the Grok API key from build configuration
+     * Gets the Grok API key from environment variables
      * 
-     * This method supports multiple approaches:
-     * 1. Info.plist (current implementation)
-     * 2. Secrets.xcconfig (requires project configuration)
-     * 3. Environment variables (development fallback)
-     * 
-     * To use Secrets.xcconfig:
-     * 1. Add Secrets.xcconfig to project build settings
-     * 2. Add GROK_API_KEY=$(GROK_API_KEY) to Info.plist
-     * 3. This will automatically pull from the .xcconfig file
+     * Prioritizes ProcessInfo.environment["GROK_API_KEY"] from Secrets.xcconfig
+     * configuration. This approach keeps API keys secure and out of version control.
      */
     private func getGrokAPIKey() -> String? {
-        // Try to get from Info.plist first (if configured there)
-        if let apiKey = Bundle.main.object(forInfoDictionaryKey: "GROK_API_KEY") as? String,
-           !apiKey.isEmpty {
-            return apiKey
-        }
-        
-        // Try to get from build configuration
-        #if DEBUG
-        if let apiKey = Bundle.main.object(forInfoDictionaryKey: "GROK_API_KEY") as? String,
-           !apiKey.isEmpty {
-            return apiKey
-        }
-        #endif
-        
-        // Fallback: try environment variable (for development)
+        // Primary: Get from environment variable (from Secrets.xcconfig)
         if let apiKey = ProcessInfo.processInfo.environment["GROK_API_KEY"], !apiKey.isEmpty {
             return apiKey
         }

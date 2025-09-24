@@ -11,6 +11,7 @@
         <attribute name="tips" optional="NO" attributeType="String"/>
         <attribute name="photoURL" optional="YES" attributeType="String"/>
         <attribute name="lastModified" optional="NO" attributeType="Date" defaultValueString="0.0"/>
+        <attribute name="lastSeeded" optional="NO" attributeType="Date" defaultValueString="0.0"/>
         <attribute name="cloudKitRecordID" optional="NO" attributeType="String"/>
         <relationship name="userRatings" optional="YES" toMany="YES" deletionRule="Cascade" destinationEntity="UserRating" inverseName="spot" inverseEntity="UserRating"/>
     </entity>
