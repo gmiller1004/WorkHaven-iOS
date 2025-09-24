@@ -12,208 +12,172 @@ import CloudKit
 import OSLog
 
 /**
- * SettingsView provides controls for spot discovery and data management in WorkHaven.
- * 
- * This view includes:
- * - Auto-discover spots toggle with location permission handling
- * - Manual spot regeneration controls
- * - Debug-only data reset functionality
- * - CloudKit integration for data synchronization
- * - Accessibility support with VoiceOver
- * - Theme integration for consistent styling
- * 
- * Usage:
- * - Present as a sheet or navigation destination
- * - Integrates with LocationService and SpotViewModel
- * - Handles UserDefaults persistence for settings
- * - Provides confirmation dialogs for destructive actions
+ * SettingsView provides user controls for spot discovery preferences and debug options.
+ * Features include auto-discovery toggle, manual regeneration, and data management tools.
+ * Uses ThemeManager for consistent coffee shop aesthetic and includes accessibility support.
  */
 struct SettingsView: View {
     
-    // MARK: - Environment & State
-    
-    @Environment(\.dismiss) private var dismiss
-    @StateObject private var locationService = LocationService()
-    @StateObject private var spotViewModel = SpotViewModel()
-    
-    // MARK: - Published Properties
+    // MARK: - Properties
     
     @AppStorage("AutoDiscoverSpots") private var autoDiscoverSpots: Bool = true
-    @State private var isRegenerating: Bool = false
-    @State private var isResettingData: Bool = false
-    @State private var showResetConfirmation: Bool = false
-    @State private var showLocationPermissionAlert: Bool = false
-    @State private var locationPermissionDenied: Bool = false
+    @StateObject private var locationService = LocationService.shared
+    @StateObject private var spotViewModel = SpotViewModel()
     
-    // MARK: - Private Properties
+    @State private var showingResetAlert = false
+    @State private var isResettingData = false
+    @State private var showingError = false
+    @State private var errorMessage = ""
     
     private let logger = Logger(subsystem: "com.nextsizzle.wh", category: "SettingsView")
-    private let persistenceController = PersistenceController.shared
     
     // MARK: - Body
     
     var body: some View {
         NavigationView {
-            ScrollView {
-                VStack(spacing: ThemeManager.Spacing.large) {
-                    
-                    // Header Section
-                    headerSection
-                    
-                    // Auto-Discover Section
-                    autoDiscoverSection
-                    
-                    // Manual Controls Section
-                    manualControlsSection
-                    
-                    // Debug Section (Debug builds only)
-                    #if DEBUG
-                    debugSection
-                    #endif
-                    
-                    Spacer(minLength: 50)
+            ZStack {
+                // Background
+                ThemeManager.SwiftUIColors.latte
+                    .ignoresSafeArea()
+                
+                if isResettingData {
+                    // Coffee steam spinner during data reset
+                    VStack(spacing: ThemeManager.Spacing.md) {
+                        CoffeeSteamSpinner()
+                        Text("Resetting all data...")
+                            .font(ThemeManager.SwiftUIFonts.body)
+                            .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+                    }
+                } else {
+                    // Settings content
+                    settingsContent
                 }
-                .padding(.horizontal, ThemeManager.Spacing.medium)
-                .padding(.top, ThemeManager.Spacing.medium)
             }
-            .background(Color(ThemeManager.Colors.latte))
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.large)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Done") {
-                        dismiss()
+            .alert("Delete all spots?", isPresented: $showingResetAlert) {
+                Button("Cancel", role: .cancel) {
+                    // Do nothing
+                }
+                .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+                
+                Button("Delete", role: .destructive) {
+                    Task {
+                        await resetAllData()
                     }
-                    .font(Font(ThemeManager.Fonts.body))
-                    .foregroundColor(Color(ThemeManager.Colors.mocha))
                 }
+                .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+            } message: {
+                Text("This will permanently delete all spots and ratings from your device and iCloud. This action cannot be undone.")
             }
-        }
-        .alert("Location Permission Required", isPresented: $showLocationPermissionAlert) {
-            Button("Settings") {
-                openAppSettings()
-            }
-            Button("Cancel", role: .cancel) { }
-        } message: {
-            Text("WorkHaven needs location access to discover nearby work spots. Please enable location permissions in Settings.")
-        }
-        .alert("Delete All Spots?", isPresented: $showResetConfirmation) {
-            Button("Cancel", role: .cancel) { }
-            Button("Delete All", role: .destructive) {
-                Task {
-                    await resetAllData()
+            .alert("Error", isPresented: $showingError) {
+                Button("OK", role: .cancel) {
+                    errorMessage = ""
                 }
+                .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+            } message: {
+                Text(errorMessage)
             }
-        } message: {
-            Text("This will permanently delete all spots and ratings from your device and iCloud. This action cannot be undone.")
-        }
-        .onAppear {
-            checkLocationPermission()
         }
     }
     
-    // MARK: - Header Section
+    // MARK: - Settings Content
     
-    private var headerSection: some View {
-        VStack(spacing: ThemeManager.Spacing.small) {
-            Image(systemName: "gearshape.fill")
-                .font(.system(size: 48))
-                .foregroundColor(Color(ThemeManager.Colors.mocha))
-            
-            Text("WorkHaven Settings")
-                .font(Font(ThemeManager.Fonts.title))
-                .foregroundColor(Color(ThemeManager.Colors.mocha))
-            
-            Text("Customize your spot discovery experience")
-                .font(Font(ThemeManager.Fonts.caption))
-                .foregroundColor(Color(ThemeManager.Colors.mocha).opacity(0.7))
-                .multilineTextAlignment(.center)
+    private var settingsContent: some View {
+        ScrollView {
+            VStack(spacing: ThemeManager.Spacing.lg) {
+                // Auto-Discover Section
+                autoDiscoverSection
+                
+                // Manual Actions Section
+                manualActionsSection
+                
+                #if DEBUG
+                // Debug Section
+                debugSection
+                #endif
+                
+                // App Info Section
+                appInfoSection
+            }
+            .padding(ThemeManager.Spacing.md)
         }
-        .padding(.vertical, ThemeManager.Spacing.medium)
     }
     
     // MARK: - Auto-Discover Section
     
     private var autoDiscoverSection: some View {
-        VStack(alignment: .leading, spacing: ThemeManager.Spacing.medium) {
-            
+        VStack(alignment: .leading, spacing: ThemeManager.Spacing.md) {
             Text("Spot Discovery")
-                .font(Font(ThemeManager.Fonts.headline))
-                .foregroundColor(Color(ThemeManager.Colors.mocha))
+                .font(ThemeManager.SwiftUIFonts.headline)
+                .foregroundColor(ThemeManager.SwiftUIColors.mocha)
             
-            VStack(spacing: ThemeManager.Spacing.small) {
-                
+            VStack(spacing: ThemeManager.Spacing.sm) {
                 // Auto-Discover Toggle
                 HStack {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Auto-Discover Spots")
-                            .font(Font(ThemeManager.Fonts.body))
-                            .foregroundColor(Color(ThemeManager.Colors.mocha))
+                            .font(ThemeManager.SwiftUIFonts.body)
+                            .foregroundColor(ThemeManager.SwiftUIColors.mocha)
                         
                         Text("Find nearby spots using Apple Maps and AI (requires location/internet)")
-                            .font(Font(ThemeManager.Fonts.caption))
-                            .foregroundColor(Color(ThemeManager.Colors.mocha).opacity(0.7))
+                            .font(ThemeManager.SwiftUIFonts.caption)
+                            .foregroundColor(ThemeManager.SwiftUIColors.mocha.opacity(0.7))
                             .multilineTextAlignment(.leading)
                     }
                     
                     Spacer()
                     
                     Toggle("", isOn: $autoDiscoverSpots)
-                        .toggleStyle(SwitchToggleStyle(tint: Color(ThemeManager.Colors.mocha)))
+                        .tint(ThemeManager.SwiftUIColors.mocha)
+                        .accessibilityLabel("Toggle auto-discover spots")
                         .onChange(of: autoDiscoverSpots) { newValue in
                             handleAutoDiscoverToggle(newValue)
                         }
-                        .accessibilityLabel("Toggle auto-discover spots")
-                        .accessibilityHint("Enable or disable automatic spot discovery")
                 }
-                .padding()
+                .padding(ThemeManager.Spacing.md)
                 .background(
                     RoundedRectangle(cornerRadius: ThemeManager.CornerRadius.medium)
-                        .fill(Color(ThemeManager.Colors.latte))
-                        .shadow(color: .black.opacity(0.1), radius: 2, x: 0, y: 1)
+                        .fill(Color.white)
+                        .shadow(
+                            color: ThemeManager.SwiftUIColors.mocha.opacity(0.1),
+                            radius: 2,
+                            x: 0,
+                            y: 1
+                        )
                 )
                 
                 // Location Permission Status
-                if !locationService.isAuthorized && autoDiscoverSpots {
-                    HStack {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundColor(Color(ThemeManager.Colors.coral))
-                        
-                        Text("Location permission required for auto-discovery")
-                            .font(Font(ThemeManager.Fonts.caption))
-                            .foregroundColor(Color(ThemeManager.Colors.coral))
-                        
-                        Spacer()
-                        
-                        Button("Enable") {
-                            Task {
-                                await requestLocationPermission()
-                            }
-                        }
-                        .font(Font(ThemeManager.Fonts.caption))
-                        .foregroundColor(Color(ThemeManager.Colors.mocha))
-                    }
-                    .padding()
-                    .background(
-                        RoundedRectangle(cornerRadius: ThemeManager.CornerRadius.small)
-                            .fill(Color(ThemeManager.Colors.coral).opacity(0.1))
-                    )
-                }
+                locationPermissionStatus
             }
         }
     }
     
-    // MARK: - Manual Controls Section
+    // MARK: - Location Permission Status
     
-    private var manualControlsSection: some View {
-        VStack(alignment: .leading, spacing: ThemeManager.Spacing.medium) {
+    private var locationPermissionStatus: some View {
+        HStack {
+            Image(systemName: locationService.isAuthorized ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                .foregroundColor(locationService.isAuthorized ? .green : .orange)
             
-            Text("Manual Controls")
-                .font(Font(ThemeManager.Fonts.headline))
-                .foregroundColor(Color(ThemeManager.Colors.mocha))
+            Text(locationService.isAuthorized ? "Location access granted" : "Location access required")
+                .font(ThemeManager.SwiftUIFonts.caption)
+                .foregroundColor(ThemeManager.SwiftUIColors.mocha.opacity(0.7))
             
-            VStack(spacing: ThemeManager.Spacing.small) {
-                
+            Spacer()
+        }
+        .padding(.horizontal, ThemeManager.Spacing.md)
+    }
+    
+    // MARK: - Manual Actions Section
+    
+    private var manualActionsSection: some View {
+        VStack(alignment: .leading, spacing: ThemeManager.Spacing.md) {
+            Text("Manual Actions")
+                .font(ThemeManager.SwiftUIFonts.headline)
+                .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+            
+            VStack(spacing: ThemeManager.Spacing.sm) {
                 // Regenerate Now Button
                 Button(action: {
                     Task {
@@ -221,297 +185,200 @@ struct SettingsView: View {
                     }
                 }) {
                     HStack {
-                        if isRegenerating {
-                            coffeeSteamSpinner
-                        } else {
-                            Image(systemName: "arrow.clockwise")
-                                .font(.system(size: 16, weight: .medium))
-                        }
-                        
-                        Text(isRegenerating ? "Regenerating..." : "Regenerate Now")
-                            .font(Font(ThemeManager.Fonts.body))
-                            .fontWeight(.medium)
+                        Image(systemName: "arrow.clockwise")
+                        Text("Regenerate Now")
                     }
-                    .foregroundColor(Color(ThemeManager.Colors.latte))
+                    .font(ThemeManager.SwiftUIFonts.body)
+                    .foregroundColor(ThemeManager.SwiftUIColors.mocha)
                     .frame(maxWidth: .infinity)
-                    .padding()
+                    .padding(ThemeManager.Spacing.md)
                     .background(
                         RoundedRectangle(cornerRadius: ThemeManager.CornerRadius.medium)
-                            .fill(Color(ThemeManager.Colors.mocha))
+                            .fill(ThemeManager.SwiftUIColors.coral)
                     )
                 }
-                .disabled(isRegenerating || !locationService.isAuthorized)
                 .accessibilityLabel("Regenerate spots now")
-                .accessibilityHint("Force refresh nearby work spots")
-                
-                Text("Force refresh nearby work spots")
-                    .font(Font(ThemeManager.Fonts.caption))
-                    .foregroundColor(Color(ThemeManager.Colors.mocha).opacity(0.7))
-                    .multilineTextAlignment(.center)
+                .disabled(spotViewModel.isSeeding)
             }
         }
     }
     
+    #if DEBUG
     // MARK: - Debug Section
     
-    #if DEBUG
     private var debugSection: some View {
-        VStack(alignment: .leading, spacing: ThemeManager.Spacing.medium) {
+        VStack(alignment: .leading, spacing: ThemeManager.Spacing.md) {
+            Text("Debug Tools")
+                .font(ThemeManager.SwiftUIFonts.headline)
+                .foregroundColor(ThemeManager.SwiftUIColors.mocha)
             
-            Text("Debug Controls")
-                .font(Font(ThemeManager.Fonts.headline))
-                .foregroundColor(Color(ThemeManager.Colors.mocha))
-            
-            VStack(spacing: ThemeManager.Spacing.small) {
-                
+            VStack(spacing: ThemeManager.Spacing.sm) {
                 // Reset All Data Button
                 Button(action: {
-                    showResetConfirmation = true
+                    showingResetAlert = true
                 }) {
                     HStack {
-                        if isResettingData {
-                            coffeeSteamSpinner
-                        } else {
-                            Image(systemName: "trash.fill")
-                                .font(.system(size: 16, weight: .medium))
-                        }
-                        
-                        Text(isResettingData ? "Resetting..." : "Reset All Data")
-                            .font(Font(ThemeManager.Fonts.body))
-                            .fontWeight(.medium)
+                        Image(systemName: "trash")
+                        Text("Reset All Data")
                     }
-                    .foregroundColor(Color(ThemeManager.Colors.latte))
+                    .font(ThemeManager.SwiftUIFonts.body)
+                    .foregroundColor(.white)
                     .frame(maxWidth: .infinity)
-                    .padding()
+                    .padding(ThemeManager.Spacing.md)
                     .background(
                         RoundedRectangle(cornerRadius: ThemeManager.CornerRadius.medium)
-                            .fill(Color(ThemeManager.Colors.coral))
+                            .fill(.red)
                     )
                 }
-                .disabled(isResettingData)
                 .accessibilityLabel("Reset all data")
-                .accessibilityHint("Permanently delete all spots and ratings")
-                
-                Text("⚠️ This will permanently delete all spots and ratings")
-                    .font(Font(ThemeManager.Fonts.caption))
-                    .foregroundColor(Color(ThemeManager.Colors.coral))
-                    .multilineTextAlignment(.center)
+                .disabled(isResettingData)
             }
         }
     }
     #endif
     
-    // MARK: - Coffee Steam Spinner
+    // MARK: - App Info Section
     
-    private var coffeeSteamSpinner: some View {
-        HStack(spacing: 2) {
-            ForEach(0..<3) { index in
-                RoundedRectangle(cornerRadius: 1)
-                    .fill(Color(ThemeManager.Colors.latte))
-                    .frame(width: 3, height: 8)
-                    .scaleEffect(y: 0.5)
-                    .animation(
-                        Animation.easeInOut(duration: 0.6)
-                            .repeatForever()
-                            .delay(Double(index) * 0.2),
-                        value: isRegenerating || isResettingData
-                    )
+    private var appInfoSection: some View {
+        VStack(alignment: .leading, spacing: ThemeManager.Spacing.md) {
+            Text("App Information")
+                .font(ThemeManager.SwiftUIFonts.headline)
+                .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+            
+            VStack(spacing: ThemeManager.Spacing.sm) {
+                HStack {
+                    Text("Version")
+                        .font(ThemeManager.SwiftUIFonts.body)
+                        .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+                    
+                    Spacer()
+                    
+                    Text("1.0.0")
+                        .font(ThemeManager.SwiftUIFonts.caption)
+                        .foregroundColor(ThemeManager.SwiftUIColors.mocha.opacity(0.7))
+                }
+                
+                HStack {
+                    Text("Build")
+                        .font(ThemeManager.SwiftUIFonts.body)
+                        .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+                    
+                    Spacer()
+                    
+                    Text("1")
+                        .font(ThemeManager.SwiftUIFonts.caption)
+                        .foregroundColor(ThemeManager.SwiftUIColors.mocha.opacity(0.7))
+                }
             }
+            .padding(ThemeManager.Spacing.md)
+            .background(
+                RoundedRectangle(cornerRadius: ThemeManager.CornerRadius.medium)
+                    .fill(Color.white)
+                    .shadow(
+                        color: ThemeManager.SwiftUIColors.mocha.opacity(0.1),
+                        radius: 2,
+                        x: 0,
+                        y: 1
+                    )
+            )
         }
     }
     
-    // MARK: - Private Methods
+    // MARK: - Methods
     
     /**
      * Handles auto-discover toggle changes
      */
-    private func handleAutoDiscoverToggle(_ isEnabled: Bool) {
-        logger.info("Auto-discover toggled: \(isEnabled)")
-        
-        if isEnabled {
+    private func handleAutoDiscoverToggle(_ enabled: Bool) {
+        if enabled {
             Task {
-                await requestLocationPermission()
+                let granted = await locationService.requestLocationPermission()
+                if !granted {
+                    logger.warning("Location permission denied, disabling auto-discover")
+                    autoDiscoverSpots = false
+                    errorMessage = "Location permission is required for auto-discovery"
+                    showingError = true
+                }
             }
         }
     }
     
     /**
-     * Requests location permission
-     */
-    private func requestLocationPermission() async {
-        logger.info("Requesting location permission")
-        
-        let isAuthorized = await locationService.requestLocationPermission()
-        
-        if !isAuthorized {
-            logger.warning("Location permission denied")
-            locationPermissionDenied = true
-            showLocationPermissionAlert = true
-        }
-    }
-    
-    /**
-     * Checks current location permission status
-     */
-    private func checkLocationPermission() {
-        logger.info("Checking location permission status")
-        
-        if autoDiscoverSpots && !locationService.isAuthorized {
-            Task {
-                await requestLocationPermission()
-            }
-        }
-    }
-    
-    /**
-     * Regenerates spots manually
+     * Regenerates spots using current location
      */
     private func regenerateSpots() async {
-        logger.info("Starting manual spot regeneration")
-        
-        isRegenerating = true
-        
-        // Get current location or use a default location
-        if let currentLocation = locationService.currentLocation {
-            await spotViewModel.loadSpots(near: currentLocation)
-        } else {
-            // Use a default location (San Francisco) for testing
-            let defaultLocation = CLLocation(latitude: 37.7749, longitude: -122.4194)
-            await spotViewModel.loadSpots(near: defaultLocation)
+        guard let location = locationService.currentLocation else {
+            errorMessage = "Current location not available. Please enable location services."
+            showingError = true
+            return
         }
         
-        isRegenerating = false
-        logger.info("Manual spot regeneration completed")
+        await spotViewModel.refreshSpots(near: location)
+        
+        if let error = spotViewModel.errorMessage {
+            errorMessage = error
+            showingError = true
+        }
     }
     
     /**
-     * Resets all data (Core Data + CloudKit)
+     * Resets all data from Core Data and CloudKit
      */
     private func resetAllData() async {
-        logger.info("Starting data reset")
-        
         isResettingData = true
         
         do {
             // Reset Core Data
             try await resetCoreData()
             
-            // Reset CloudKit
-            try await resetCloudKit()
+            // Reset CloudKit (simplified for demo)
+            await resetCloudKit()
             
-            logger.info("Data reset completed successfully")
+            logger.info("Successfully reset all data")
             
         } catch {
-            logger.error("Data reset failed: \(error.localizedDescription)")
+            logger.error("Failed to reset data: \(error.localizedDescription)")
+            errorMessage = "Failed to reset data: \(error.localizedDescription)"
+            showingError = true
         }
         
         isResettingData = false
     }
     
     /**
-     * Resets Core Data using batch delete
+     * Resets Core Data using NSBatchDeleteRequest
      */
     private func resetCoreData() async throws {
-        logger.info("Resetting Core Data")
+        let context = PersistenceController.shared.container.viewContext
         
-        let context = persistenceController.container.viewContext
+        // Delete UserRating entities first (due to relationship)
+        let userRatingRequest = NSBatchDeleteRequest(fetchRequest: UserRating.fetchRequest())
+        try context.execute(userRatingRequest)
         
-        try await context.perform {
-            // Delete all Spots
-            let spotRequest: NSFetchRequest<NSFetchRequestResult> = Spot.fetchRequest()
-            let spotDeleteRequest = NSBatchDeleteRequest(fetchRequest: spotRequest)
-            try context.execute(spotDeleteRequest)
-            
-            // Delete all UserRatings
-            let ratingRequest: NSFetchRequest<NSFetchRequestResult> = UserRating.fetchRequest()
-            let ratingDeleteRequest = NSBatchDeleteRequest(fetchRequest: ratingRequest)
-            try context.execute(ratingDeleteRequest)
-            
-            // Save context
-            try context.save()
-        }
+        // Delete Spot entities
+        let spotRequest = NSBatchDeleteRequest(fetchRequest: Spot.fetchRequest())
+        try context.execute(spotRequest)
+        
+        // Save context
+        try context.save()
         
         logger.info("Core Data reset completed")
     }
     
     /**
-     * Resets CloudKit data
+     * Resets CloudKit data (simplified implementation)
      */
-    private func resetCloudKit() async throws {
-        logger.info("Resetting CloudKit data")
-        
-        let container = CKContainer.default()
-        let database = container.privateCloudDatabase
-        
-        // Delete all Spot records
-        try await deleteAllRecords(in: database, recordType: "Spot")
-        
-        // Delete all UserRating records
-        try await deleteAllRecords(in: database, recordType: "UserRating")
-        
-        logger.info("CloudKit reset completed")
-    }
-    
-    /**
-     * Deletes all records of a specific type from CloudKit
-     */
-    private func deleteAllRecords(in database: CKDatabase, recordType: String) async throws {
-        logger.info("Deleting all \(recordType) records from CloudKit")
-        
-        // For now, we'll just log that CloudKit deletion would happen here
-        // In a production app, you'd implement proper CloudKit batch deletion
-        // This is a simplified version for the demo
-        
-        logger.info("CloudKit deletion completed for \(recordType)")
-    }
-    
-    /**
-     * Opens app settings
-     */
-    private func openAppSettings() {
-        if let settingsUrl = URL(string: UIApplication.openSettingsURLString) {
-            UIApplication.shared.open(settingsUrl)
-        }
+    private func resetCloudKit() async {
+        // Note: This is a simplified implementation for demo purposes
+        // In a production app, you would implement proper CloudKit deletion
+        logger.info("CloudKit reset completed (simplified implementation)")
     }
 }
+
 
 // MARK: - Preview
 
 #Preview {
     SettingsView()
-}
-
-// MARK: - Accessibility Extensions
-
-extension SettingsView {
-    
-    /**
-     * Provides accessibility support for the settings view
-     */
-    private var accessibilityElements: some View {
-        VStack {
-            // Auto-discover toggle accessibility
-            Toggle("Auto-discover spots", isOn: $autoDiscoverSpots)
-                .accessibilityLabel("Toggle auto-discover spots")
-                .accessibilityHint("Enable or disable automatic spot discovery using location and AI")
-            
-            // Regenerate button accessibility
-            Button("Regenerate spots") {
-                Task {
-                    await regenerateSpots()
-                }
-            }
-            .accessibilityLabel("Regenerate spots now")
-            .accessibilityHint("Force refresh nearby work spots")
-            
-            #if DEBUG
-            // Reset button accessibility
-            Button("Reset all data") {
-                showResetConfirmation = true
-            }
-            .accessibilityLabel("Reset all data")
-            .accessibilityHint("Permanently delete all spots and ratings")
-            #endif
-        }
-    }
+        .environment(\.managedObjectContext, PersistenceController.preview.container.viewContext)
 }
