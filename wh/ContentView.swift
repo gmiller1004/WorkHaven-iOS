@@ -103,12 +103,24 @@ struct ContentView: View {
             return
         }
         
-        let location = locationService.currentLocation ?? fallbackLocation
-        logger.info("Loading spots with location: \(location.coordinate.latitude), \(location.coordinate.longitude)")
-        
-        Task {
-            await spotViewModel.loadSpots(near: location)
-            hasPerformedInitialLoad = true
+        // Wait for location to be available or use fallback after a short delay
+        if locationService.currentLocation == nil {
+            logger.info("No user location available, waiting for location or using fallback")
+            // Wait a bit for location to be available, then proceed with fallback
+            Task {
+                try await Task.sleep(nanoseconds: 2_000_000_000) // 2 seconds
+                let location = locationService.currentLocation ?? fallbackLocation
+                logger.info("Loading spots with location: \(location.coordinate.latitude), \(location.coordinate.longitude)")
+                await spotViewModel.loadSpots(near: location)
+                hasPerformedInitialLoad = true
+            }
+        } else {
+            let location = locationService.currentLocation!
+            logger.info("Loading spots with location: \(location.coordinate.latitude), \(location.coordinate.longitude)")
+            Task {
+                await spotViewModel.loadSpots(near: location)
+                hasPerformedInitialLoad = true
+            }
         }
     }
 }

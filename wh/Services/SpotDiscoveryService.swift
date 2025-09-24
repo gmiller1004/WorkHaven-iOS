@@ -406,7 +406,12 @@ class SpotDiscoveryService: ObservableObject {
         }.joined(separator: ", ")
         
         let prompt = """
-        For these locations: \(spotDescriptions), estimate WiFi rating (1-5 stars), noise level (Low/Medium/High), plugs (Yes/No), and a short tip for each. Respond in JSON array format: [{"name": "Location Name", "wifi": number, "noise": string, "plugs": bool, "tip": string}, ...].
+        For these locations: \(spotDescriptions), estimate WiFi rating (1-5 stars), noise level (Low/Medium/High), plugs (Yes/No), and a short tip for each. 
+        
+        IMPORTANT: Respond ONLY with a valid JSON array in this exact format:
+        [{"name": "Exact Location Name", "wifi": 4, "noise": "Medium", "plugs": true, "tip": "Great coffee and atmosphere"}]
+        
+        Ensure each location name matches exactly with the input. Use only "Low", "Medium", or "High" for noise levels.
         """
         
         let requestBody = GrokRequest(
@@ -424,8 +429,12 @@ class SpotDiscoveryService: ObservableObject {
         var spots: [Spot] = []
         if let content = enrichedData.choices.first?.message.content,
            let data = content.data(using: .utf8) {
+            
+            logger.debug("Grok API response: \(content)")
+            
             do {
                 let batchData = try JSONDecoder().decode([BatchSpotData].self, from: data)
+                logger.info("Successfully parsed \(batchData.count) enriched spots from Grok API")
                 
                 // Match batch data to map items by name
                 for mapItem in mapItems {
@@ -433,14 +442,17 @@ class SpotDiscoveryService: ObservableObject {
                     if let spotData = batchData.first(where: { $0.name.lowercased() == name.lowercased() }) {
                         let spot = createSpotFromMapItem(mapItem: mapItem, batchData: spotData)
                         spots.append(spot)
+                        logger.debug("Enriched spot: \(name) - WiFi: \(spotData.wifi), Noise: \(spotData.noise)")
                     } else {
+                        logger.warning("No Grok data found for \(name), using defaults")
                         // Fallback to default if no match found
                         let defaultSpot = try await createSpotWithDefaults(mapItem: mapItem)
                         spots.append(defaultSpot)
                     }
                 }
             } catch {
-                logger.warning("Failed to parse batch enriched data, using defaults: \(error.localizedDescription)")
+                logger.error("Failed to parse batch enriched data: \(error.localizedDescription)")
+                logger.error("Raw response: \(content)")
                 // Fallback to individual processing
                 for mapItem in mapItems {
                     let defaultSpot = try await createSpotWithDefaults(mapItem: mapItem)
@@ -448,6 +460,7 @@ class SpotDiscoveryService: ObservableObject {
                 }
             }
         } else {
+            logger.warning("No content in Grok API response, using defaults")
             // Fallback to defaults if no content
             for mapItem in mapItems {
                 let defaultSpot = try await createSpotWithDefaults(mapItem: mapItem)
