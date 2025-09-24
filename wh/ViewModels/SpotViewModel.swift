@@ -91,6 +91,8 @@ class SpotViewModel: ObservableObject {
                 await discoverNewSpots(near: discoveryLocation)
             } else {
                 logger.info("Using existing spots (\(existingSpots.count) found)")
+                // Refresh ratings for existing spots
+                await refreshRatings(for: existingSpots)
                 await MainActor.run {
                     self.spots = self.sortSpots(existingSpots, from: near)
                     self.isSeeding = false
@@ -334,8 +336,9 @@ class SpotViewModel: ObservableObject {
     
     /**
      * Calculates the overall rating for a spot using the specified formula
+     * Formula: min(5, 50% aggregate rating + 50% user rating average)
      * - Parameter spot: The spot to calculate rating for
-     * - Returns: Overall rating (0.0 to 5.0)
+     * - Returns: Overall rating (0.0 to 5.0), capped at 5 stars
      */
     public func calculateOverallRating(for spot: Spot) -> Double {
         // Calculate aggregate rating (50% weight)
@@ -349,44 +352,49 @@ class SpotViewModel: ObservableObject {
             return aggregateRating
         }
         
-        // Combine with 50/50 weighting
-        return (aggregateRating * 0.5) + (userRatingAverage * 0.5)
+        // Combine with 50/50 weighting and cap at 5 stars
+        let combinedRating = (aggregateRating * 0.5) + (userRatingAverage * 0.5)
+        return min(5.0, combinedRating)
     }
     
     /**
      * Calculates the aggregate rating based on WiFi, noise, and outlets
-     * Formula: (wifiRating/5 + noiseInverted + outlets)/3
+     * Formula: min(5, (wifiNormalized + noiseInverted + outlets) / 3), rounded to 0.5
      * - Parameter spot: The spot to calculate rating for
-     * - Returns: Aggregate rating (0.0 to 5.0)
+     * - Returns: Aggregate rating (0.0 to 5.0), capped at 5 stars, rounded to 0.5
      */
     private func calculateAggregateRating(for spot: Spot) -> Double {
         // WiFi rating (normalized to 0-5 scale)
-        let wifiScore = Double(spot.wifiRating) / 5.0 * 5.0 // Scale to 0-5
+        let wifiNormalized = Double(spot.wifiRating)
         
-        // Noise rating (Low=5, Medium=3, High=1, normalized to 0-5 scale)
-        let noiseScore: Double
+        // Noise rating (Low=5, Medium=3, High=1)
+        let noiseInverted: Double
         switch spot.noiseRating.lowercased() {
         case "low":
-            noiseScore = 5.0
+            noiseInverted = 5.0
         case "medium":
-            noiseScore = 3.0
+            noiseInverted = 3.0
         case "high":
-            noiseScore = 1.0
+            noiseInverted = 1.0
         default:
-            noiseScore = 3.0 // Default to medium
+            noiseInverted = 3.0 // Default to medium
         }
         
-        // Outlets rating (Yes=5, No=1, normalized to 0-5 scale)
-        let outletsScore = spot.outlets ? 5.0 : 1.0
+        // Outlets rating (Yes=5, No=1)
+        let outlets = spot.outlets ? 5.0 : 1.0
         
-        // Average of the three components, then normalize to 0-5 scale
-        return (wifiScore + noiseScore + outletsScore) / 3.0
+        // Calculate average and cap at 5
+        let average = (wifiNormalized + noiseInverted + outlets) / 3.0
+        let capped = min(5.0, average)
+        
+        // Round to nearest 0.5
+        return round(capped * 2.0) / 2.0
     }
     
     /**
      * Calculates the average user rating for a spot
      * - Parameter spot: The spot to calculate rating for
-     * - Returns: Average user rating (0.0 to 5.0), or 0 if no ratings
+     * - Returns: Average user rating (0.0 to 5.0), capped at 5 stars, rounded to 0.5, or 0 if no ratings
      */
     private func calculateUserRatingAverage(for spot: Spot) -> Double {
         guard let userRatings = spot.userRatings, userRatings.count > 0 else {
@@ -398,26 +406,55 @@ class SpotViewModel: ObservableObject {
             guard let userRating = rating as? UserRating else { return }
             
             // Calculate individual user rating using same formula as aggregate
-            let wifiScore = Double(userRating.wifi) / 5.0 * 5.0
+            let wifiNormalized = Double(userRating.wifi)
             
-            let noiseScore: Double
+            let noiseInverted: Double
             switch userRating.noise.lowercased() {
             case "low":
-                noiseScore = 5.0
+                noiseInverted = 5.0
             case "medium":
-                noiseScore = 3.0
+                noiseInverted = 3.0
             case "high":
-                noiseScore = 1.0
+                noiseInverted = 1.0
             default:
-                noiseScore = 3.0
+                noiseInverted = 3.0
             }
             
-            let outletsScore = userRating.plugs ? 5.0 : 1.0
+            let outlets = userRating.plugs ? 5.0 : 1.0
             
-            sum += (wifiScore + noiseScore + outletsScore) / 3.0
+            // Calculate average and cap at 5
+            let average = (wifiNormalized + noiseInverted + outlets) / 3.0
+            let capped = min(5.0, average)
+            
+            sum += capped
         }
         
-        return totalRating / Double(userRatings.count)
+        let average = totalRating / Double(userRatings.count)
+        let capped = min(5.0, average)
+        
+        // Round to nearest 0.5
+        return round(capped * 2.0) / 2.0
+    }
+    
+    /**
+     * Refreshes ratings for a collection of spots by recalculating overall ratings
+     * Since overallRating is calculated dynamically, this method ensures the calculation
+     * is performed with the latest formula and logs the results for debugging
+     * - Parameter spots: Array of spots to refresh ratings for
+     */
+    private func refreshRatings(for spots: [Spot]) async {
+        logger.info("Refreshing ratings for \(spots.count) spots")
+        
+        for spot in spots {
+            // Recalculate the overall rating using the updated formula
+            let newOverallRating = calculateOverallRating(for: spot)
+            let aggregateRating = calculateAggregateRating(for: spot)
+            let userRatingAverage = calculateUserRatingAverage(for: spot)
+            
+            logger.debug("Rating for \(spot.name): Overall=\(String(format: "%.2f", newOverallRating)), Aggregate=\(String(format: "%.2f", aggregateRating)), UserAvg=\(String(format: "%.2f", userRatingAverage))")
+        }
+        
+        logger.info("Rating refresh completed for \(spots.count) spots")
     }
     
     // MARK: - Helper Methods
