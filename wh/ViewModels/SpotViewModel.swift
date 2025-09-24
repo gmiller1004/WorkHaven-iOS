@@ -89,14 +89,14 @@ class SpotViewModel: ObservableObject {
             } else {
                 logger.info("Using existing spots (\(existingSpots.count) found)")
                 spots = sortSpots(existingSpots, from: near)
+                isSeeding = false
             }
             
         } catch {
             logger.error("Failed to load spots: \(error.localizedDescription)")
             errorMessage = "Failed to load spots: \(error.localizedDescription)"
+            isSeeding = false
         }
-        
-        isSeeding = false
     }
     
     /**
@@ -231,9 +231,20 @@ class SpotViewModel: ObservableObject {
         
         logger.info("Starting spot discovery process")
         
+        // Start monitoring discovery progress
+        let progressTask = Task { @MainActor in
+            while spotDiscoveryService.isDiscovering {
+                discoveryProgress = spotDiscoveryService.discoveryProgress
+                try? await Task.sleep(nanoseconds: 200_000_000) // 0.2 seconds
+            }
+        }
+        
         do {
             // Start discovery
             let discoveredSpots = await spotDiscoveryService.discoverSpots(near: near, radius: searchRadius)
+            
+            // Cancel progress monitoring
+            progressTask.cancel()
             
             // Sort spots by distance and rating
             let sortedSpots = sortSpots(discoveredSpots, from: near)
@@ -244,6 +255,7 @@ class SpotViewModel: ObservableObject {
         } catch {
             logger.error("Discovery failed: \(error.localizedDescription)")
             errorMessage = "Discovery failed: \(error.localizedDescription)"
+            progressTask.cancel()
         }
         
         isSeeding = false
