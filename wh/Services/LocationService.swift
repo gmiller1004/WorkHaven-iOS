@@ -8,22 +8,13 @@
 
 import Foundation
 import CoreLocation
+import SwiftUI
 import OSLog
 
 /**
  * LocationService manages user location permissions and tracking for WorkHaven.
- * 
- * This service provides:
- * - Location permission management (when-in-use and always)
- * - Real-time location updates
- * - Geofencing support (optional, controlled via UserDefaults)
- * - Authorization status monitoring
- * - Async/await permission request handling
- * 
- * Usage:
- * - Call requestLocationPermission() to request when-in-use access
- * - Enable geofencing via UserDefaults.standard.set(true, forKey: "GeofencingEnabled")
- * - Monitor currentLocation and isAuthorized via @Published properties
+ * Provides real-time location updates and handles permission requests with async/await.
+ * Supports both when-in-use and always location access for geofencing features.
  */
 @MainActor
 class LocationService: NSObject, ObservableObject {
@@ -33,8 +24,11 @@ class LocationService: NSObject, ObservableObject {
     /// Current user location, nil if not available
     @Published var currentLocation: CLLocation?
     
-    /// Whether location access is authorized
+    /// Location authorization status
     @Published var isAuthorized: Bool = false
+    
+    /// Location permission status for detailed UI feedback
+    @Published var authorizationStatus: CLAuthorizationStatus = .notDetermined
     
     // MARK: - Private Properties
     
@@ -42,10 +36,11 @@ class LocationService: NSObject, ObservableObject {
     private let logger = Logger(subsystem: "com.nextsizzle.wh", category: "LocationService")
     
     /// UserDefaults key for geofencing preference
-    private let geofencingKey = "GeofencingEnabled"
+    private let geofencingEnabledKey = "GeofencingEnabled"
     
-    /// Continuation for async permission requests
-    private var permissionContinuation: CheckedContinuation<Bool, Never>?
+    // MARK: - Singleton
+    
+    static let shared = LocationService()
     
     // MARK: - Initialization
     
@@ -55,151 +50,216 @@ class LocationService: NSObject, ObservableObject {
         updateAuthorizationStatus()
     }
     
-    // MARK: - Public Methods
+    // MARK: - Setup
+    
+    /**
+     * Configures the CLLocationManager with appropriate settings
+     */
+    private func setupLocationManager() {
+        locationManager.delegate = self
+        locationManager.desiredAccuracy = kCLLocationAccuracyBest
+        locationManager.distanceFilter = 10.0 // Update every 10 meters
+        
+        // Check if location services are available
+        guard CLLocationManager.locationServicesEnabled() else {
+            logger.warning("Location services are not enabled on this device")
+            return
+        }
+        
+        logger.info("LocationService initialized successfully")
+    }
+    
+    // MARK: - Permission Management
     
     /**
      * Requests when-in-use location permission
-     * 
-     * - Returns: Boolean indicating if permission was granted
+     * - Returns: True if permission is granted, false otherwise
+     */
+    func requestWhenInUsePermission() async -> Bool {
+        logger.info("Requesting when-in-use location permission")
+        
+        return await withCheckedContinuation { continuation in
+            // Check current status first
+            let currentStatus = locationManager.authorizationStatus
+            if currentStatus == .authorizedWhenInUse || currentStatus == .authorizedAlways {
+                logger.info("Location permission already granted")
+                continuation.resume(returning: true)
+                return
+            }
+            
+            if currentStatus == .denied || currentStatus == .restricted {
+                logger.warning("Location permission denied or restricted")
+                continuation.resume(returning: false)
+                return
+            }
+            
+            // Request permission
+            locationManager.requestWhenInUseAuthorization()
+            
+            // Store continuation for delegate callback
+            self.pendingPermissionContinuation = continuation
+        }
+    }
+    
+    /**
+     * Requests always location permission for geofencing
+     * - Returns: True if permission is granted, false otherwise
+     */
+    func requestAlwaysPermission() async -> Bool {
+        logger.info("Requesting always location permission for geofencing")
+        
+        return await withCheckedContinuation { continuation in
+            // Check current status first
+            let currentStatus = locationManager.authorizationStatus
+            if currentStatus == .authorizedAlways {
+                logger.info("Always location permission already granted")
+                continuation.resume(returning: true)
+                return
+            }
+            
+            if currentStatus == .denied || currentStatus == .restricted {
+                logger.warning("Location permission denied or restricted")
+                continuation.resume(returning: false)
+                return
+            }
+            
+            // Request permission
+            locationManager.requestAlwaysAuthorization()
+            
+            // Store continuation for delegate callback
+            self.pendingPermissionContinuation = continuation
+        }
+    }
+    
+    /**
+     * Requests appropriate permission based on geofencing preference
+     * - Returns: True if permission is granted, false otherwise
      */
     func requestLocationPermission() async -> Bool {
-        logger.info("Requesting location permission...")
+        let geofencingEnabled = UserDefaults.standard.bool(forKey: geofencingEnabledKey)
         
-        // Check current status first
-        let currentStatus = locationManager.authorizationStatus
-        if currentStatus == .authorizedWhenInUse || currentStatus == .authorizedAlways {
-            logger.info("Location permission already granted")
-            isAuthorized = true
-            return true
-        }
-        
-        if currentStatus == .denied || currentStatus == .restricted {
-            logger.warning("Location access denied or restricted")
-            isAuthorized = false
-            return false
-        }
-        
-        // Request permission asynchronously
-        return await withCheckedContinuation { continuation in
-            self.permissionContinuation = continuation
-            locationManager.requestWhenInUseAuthorization()
+        if geofencingEnabled {
+            logger.info("Geofencing enabled, requesting always permission")
+            return await requestAlwaysPermission()
+        } else {
+            logger.info("Geofencing disabled, requesting when-in-use permission")
+            return await requestWhenInUsePermission()
         }
     }
     
-    /**
-     * Requests always location permission (for geofencing)
-     * 
-     * - Returns: Boolean indicating if permission was granted
-     */
-    func requestAlwaysLocationPermission() async -> Bool {
-        logger.info("Requesting always location permission for geofencing...")
-        
-        // Check if geofencing is enabled
-        guard UserDefaults.standard.bool(forKey: geofencingKey) else {
-            logger.info("Geofencing not enabled, skipping always permission request")
-            return false
-        }
-        
-        // Check current status first
-        let currentStatus = locationManager.authorizationStatus
-        if currentStatus == .authorizedAlways {
-            logger.info("Always location permission already granted")
-            isAuthorized = true
-            return true
-        }
-        
-        if currentStatus == .denied || currentStatus == .restricted {
-            logger.warning("Location access denied or restricted")
-            isAuthorized = false
-            return false
-        }
-        
-        // Request always permission asynchronously
-        return await withCheckedContinuation { continuation in
-            self.permissionContinuation = continuation
-            locationManager.requestAlwaysAuthorization()
-        }
-    }
+    // MARK: - Location Tracking
     
     /**
-     * Starts location updates
-     * 
-     * - Parameter accuracy: Desired location accuracy (default: .best)
+     * Starts location tracking
      */
-    func startLocationUpdates(accuracy: CLLocationAccuracy = kCLLocationAccuracyBest) {
+    func startLocationUpdates() {
         guard isAuthorized else {
             logger.warning("Cannot start location updates: not authorized")
             return
         }
         
-        logger.info("Starting location updates with accuracy: \(accuracy)")
-        locationManager.desiredAccuracy = accuracy
+        guard CLLocationManager.locationServicesEnabled() else {
+            logger.error("Location services are not enabled")
+            return
+        }
+        
         locationManager.startUpdatingLocation()
+        logger.info("Started location updates")
     }
     
     /**
-     * Stops location updates
+     * Stops location tracking
      */
     func stopLocationUpdates() {
-        logger.info("Stopping location updates")
         locationManager.stopUpdatingLocation()
+        logger.info("Stopped location updates")
     }
     
     /**
-     * Gets the current location synchronously
-     * 
-     * - Returns: Current location if available, nil otherwise
+     * Gets current location if available
+     * - Returns: Current location or nil if not available
      */
     func getCurrentLocation() -> CLLocation? {
         return currentLocation
     }
     
-    /**
-     * Checks if geofencing is enabled
-     * 
-     * - Returns: Boolean indicating if geofencing is enabled
-     */
-    func isGeofencingEnabled() -> Bool {
-        return UserDefaults.standard.bool(forKey: geofencingKey)
-    }
+    // MARK: - Geofencing Management
     
     /**
-     * Enables or disables geofencing
-     * 
-     * - Parameter enabled: Whether to enable geofencing
+     * Enables or disables geofencing preference
+     * - Parameter enabled: Whether geofencing should be enabled
      */
     func setGeofencingEnabled(_ enabled: Bool) {
-        UserDefaults.standard.set(enabled, forKey: geofencingKey)
-        logger.info("Geofencing \(enabled ? "enabled" : "disabled")")
+        UserDefaults.standard.set(enabled, forKey: geofencingEnabledKey)
+        logger.info("Geofencing preference set to: \(enabled)")
         
-        // If enabling geofencing, request always permission
-        if enabled {
+        // If enabling geofencing and we only have when-in-use permission, request always
+        if enabled && authorizationStatus == .authorizedWhenInUse {
             Task {
-                await requestAlwaysLocationPermission()
+                await requestAlwaysPermission()
             }
         }
     }
     
-    // MARK: - Private Methods
-    
     /**
-     * Sets up the location manager with proper configuration
+     * Checks if geofencing is enabled
+     * - Returns: True if geofencing is enabled, false otherwise
      */
-    private func setupLocationManager() {
-        locationManager.delegate = self
-        locationManager.desiredAccuracy = kCLLocationAccuracyBest
-        locationManager.distanceFilter = 10 // Update every 10 meters
+    func isGeofencingEnabled() -> Bool {
+        return UserDefaults.standard.bool(forKey: geofencingEnabledKey)
     }
     
+    // MARK: - Helper Methods
+    
     /**
-     * Updates the authorization status based on current permission state
+     * Updates authorization status and published properties
      */
     private func updateAuthorizationStatus() {
-        let status = locationManager.authorizationStatus
-        isAuthorized = (status == .authorizedWhenInUse || status == .authorizedAlways)
+        authorizationStatus = locationManager.authorizationStatus
         
-        logger.info("Location authorization status: \(status.rawValue), authorized: \(self.isAuthorized)")
+        switch authorizationStatus {
+        case .authorizedWhenInUse, .authorizedAlways:
+            isAuthorized = true
+            logger.info("Location permission granted: \(self.authorizationStatus.rawValue)")
+        case .denied:
+            isAuthorized = false
+            logger.warning("Location access denied by user")
+        case .restricted:
+            isAuthorized = false
+            logger.warning("Location access restricted by system")
+        case .notDetermined:
+            isAuthorized = false
+            logger.info("Location permission not yet determined")
+        @unknown default:
+            isAuthorized = false
+            logger.warning("Unknown location authorization status: \(self.authorizationStatus.rawValue)")
+        }
     }
+    
+    /**
+     * Handles location permission result
+     * - Parameter granted: Whether permission was granted
+     */
+    private func handlePermissionResult(granted: Bool) {
+        if granted {
+            logger.info("Location permission granted successfully")
+            startLocationUpdates()
+        } else {
+            logger.warning("Location permission denied")
+        }
+        
+            // Resume any pending permission request
+            if pendingPermissionContinuation != nil {
+                let continuation = pendingPermissionContinuation!
+                pendingPermissionContinuation = nil
+                continuation.resume(returning: granted)
+            }
+    }
+    
+    // MARK: - Private Properties for Async Handling
+    
+    /// Continuation for pending permission requests
+    private var pendingPermissionContinuation: CheckedContinuation<Bool, Never>?
 }
 
 // MARK: - CLLocationManagerDelegate
@@ -207,54 +267,18 @@ class LocationService: NSObject, ObservableObject {
 extension LocationService: @preconcurrency CLLocationManagerDelegate {
     
     /**
-     * Handles location manager authorization changes
+     * Handles location authorization changes
      */
     nonisolated func locationManager(_ manager: CLLocationManager, didChangeAuthorization status: CLAuthorizationStatus) {
-        logger.info("Location authorization changed to: \(status.rawValue)")
-        
         Task { @MainActor in
+            logger.info("Location authorization changed to: \(status.rawValue)")
             updateAuthorizationStatus()
             
-            // Resume permission continuation if waiting
-            if let continuation = permissionContinuation {
-                permissionContinuation = nil
-                continuation.resume(returning: isAuthorized)
+            // Handle permission request result
+            if let continuation = pendingPermissionContinuation {
+                let granted = (status == .authorizedWhenInUse || status == .authorizedAlways)
+                handlePermissionResult(granted: granted)
             }
-        }
-        
-        // Handle specific authorization states
-        switch status {
-        case .authorizedWhenInUse:
-            logger.info("Location access granted (when-in-use)")
-            // Start location updates if not already running
-            if !CLLocationManager.locationServicesEnabled() {
-                logger.warning("Location services not enabled on device")
-            }
-            
-        case .authorizedAlways:
-            logger.info("Location access granted (always)")
-            // Start location updates if not already running
-            if !CLLocationManager.locationServicesEnabled() {
-                logger.warning("Location services not enabled on device")
-            }
-            
-        case .denied:
-            logger.error("Location access denied by user")
-            Task { @MainActor in
-                currentLocation = nil
-            }
-            
-        case .restricted:
-            logger.error("Location access restricted (parental controls, etc.)")
-            Task { @MainActor in
-                currentLocation = nil
-            }
-            
-        case .notDetermined:
-            logger.info("Location permission not yet determined")
-            
-        @unknown default:
-            logger.warning("Unknown location authorization status: \(status.rawValue)")
         }
     }
     
@@ -262,114 +286,131 @@ extension LocationService: @preconcurrency CLLocationManagerDelegate {
      * Handles successful location updates
      */
     nonisolated func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
-        guard let location = locations.last else { return }
-        
-        // Validate location accuracy and age
-        let locationAge = -location.timestamp.timeIntervalSinceNow
-        if locationAge > 5.0 { // Ignore locations older than 5 seconds
-            logger.debug("Ignoring stale location (age: \(locationAge)s)")
-            return
-        }
-        
-        if location.horizontalAccuracy < 0 {
-            logger.debug("Ignoring invalid location (negative accuracy)")
-            return
-        }
-        
-        // Update current location
         Task { @MainActor in
+            guard let location = locations.last else { return }
+            
+            // Update current location
             currentLocation = location
+            
+            logger.info("Location updated: \(location.coordinate.latitude), \(location.coordinate.longitude)")
+            
+            // Log accuracy and timestamp
+            logger.debug("Location accuracy: \(location.horizontalAccuracy)m, timestamp: \(location.timestamp)")
         }
-        logger.debug("Location updated: \(location.coordinate.latitude), \(location.coordinate.longitude) (accuracy: \(location.horizontalAccuracy)m)")
     }
     
     /**
      * Handles location update errors
      */
     nonisolated func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
-        logger.error("Location update failed: \(error.localizedDescription)")
-        
-        // Handle specific error types
-        if let clError = error as? CLError {
-            switch clError.code {
-            case .locationUnknown:
-                logger.warning("Location unknown - continuing to try")
-                
-            case .denied:
-                logger.error("Location access denied")
-                Task { @MainActor in
+        Task { @MainActor in
+            if let clError = error as? CLError {
+                switch clError.code {
+                case .locationUnknown:
+                    logger.warning("Location unknown: \(error.localizedDescription)")
+                case .denied:
+                    logger.warning("Location access denied: \(error.localizedDescription)")
                     isAuthorized = false
-                    currentLocation = nil
+                case .network:
+                    logger.error("Location network error: \(error.localizedDescription)")
+                default:
+                    logger.error("Location error: \(error.localizedDescription)")
                 }
-                
-            case .network:
-                logger.error("Network error while getting location")
-                
-            case .headingFailure:
-                logger.warning("Heading update failed")
-                
-            default:
-                logger.error("Location error: \(clError.localizedDescription)")
+            } else {
+                logger.error("Location manager failed with error: \(error.localizedDescription)")
             }
-        } else {
-            logger.error("Unknown location error: \(error.localizedDescription)")
         }
-    }
-    
-    /**
-     * Handles location manager entering region (for geofencing)
-     */
-    nonisolated func locationManager(_ manager: CLLocationManager, didEnterRegion region: CLRegion) {
-        logger.info("Entered region: \(region.identifier)")
-        // Geofencing implementation would go here
-    }
-    
-    /**
-     * Handles location manager exiting region (for geofencing)
-     */
-    nonisolated func locationManager(_ manager: CLLocationManager, didExitRegion region: CLRegion) {
-        logger.info("Exited region: \(region.identifier)")
-        // Geofencing implementation would go here
     }
 }
 
-// MARK: - Convenience Extensions
+// MARK: - Error Handling
 
 extension LocationService {
     
     /**
-     * Gets the distance between current location and a target location
-     * 
-     * - Parameter targetLocation: The target location to measure distance to
-     * - Returns: Distance in meters, nil if current location unavailable
+     * Handles location service errors with appropriate logging
+     * - Parameter error: The error that occurred
      */
-    func distanceTo(_ targetLocation: CLLocation) -> CLLocationDistance? {
-        guard let current = currentLocation else { return nil }
-        return current.distance(from: targetLocation)
-    }
-    
-    /**
-     * Gets the distance between current location and coordinates
-     * 
-     * - Parameter latitude: Target latitude
-     * - Parameter longitude: Target longitude
-     * - Returns: Distance in meters, nil if current location unavailable
-     */
-    func distanceTo(latitude: Double, longitude: Double) -> CLLocationDistance? {
-        let targetLocation = CLLocation(latitude: latitude, longitude: longitude)
-        return distanceTo(targetLocation)
-    }
-    
-    /**
-     * Checks if current location is within a specified radius of target coordinates
-     * 
-     * - Parameter latitude: Target latitude
-     * - Parameter longitude: Target longitude
-     * - Parameter radius: Radius in meters
-     * - Returns: Boolean indicating if within radius
-     */
-    func isWithinRadius(latitude: Double, longitude: Double, radius: Double) -> Bool {
-        guard let distance = distanceTo(latitude: latitude, longitude: longitude) else { return false }
-        return distance <= radius
+    private func handleLocationError(_ error: Error) {
+        if let clError = error as? CLError {
+            switch clError.code {
+            case .locationUnknown:
+                logger.warning("Location unknown: \(error.localizedDescription)")
+            case .denied:
+                logger.warning("Location access denied: \(error.localizedDescription)")
+                isAuthorized = false
+            case .network:
+                logger.error("Location network error: \(error.localizedDescription)")
+            case .headingFailure:
+                logger.warning("Heading failure: \(error.localizedDescription)")
+            case .regionMonitoringDenied:
+                logger.warning("Region monitoring denied: \(error.localizedDescription)")
+            case .regionMonitoringFailure:
+                logger.error("Region monitoring failure: \(error.localizedDescription)")
+            case .regionMonitoringSetupDelayed:
+                logger.info("Region monitoring setup delayed: \(error.localizedDescription)")
+            case .regionMonitoringResponseDelayed:
+                logger.info("Region monitoring response delayed: \(error.localizedDescription)")
+            case .geocodeFoundNoResult:
+                logger.warning("Geocode found no result: \(error.localizedDescription)")
+            case .geocodeFoundPartialResult:
+                logger.warning("Geocode found partial result: \(error.localizedDescription)")
+            case .geocodeCanceled:
+                logger.info("Geocode canceled: \(error.localizedDescription)")
+            case .deferredFailed:
+                logger.error("Deferred location update failed: \(error.localizedDescription)")
+            case .deferredNotUpdatingLocation:
+                logger.warning("Deferred location update not updating: \(error.localizedDescription)")
+            case .deferredAccuracyTooLow:
+                logger.warning("Deferred location update accuracy too low: \(error.localizedDescription)")
+            case .deferredDistanceFiltered:
+                logger.info("Deferred location update distance filtered: \(error.localizedDescription)")
+            case .rangingUnavailable:
+                logger.warning("Ranging unavailable: \(error.localizedDescription)")
+            case .rangingFailure:
+                logger.error("Ranging failure: \(error.localizedDescription)")
+            case .deferredCanceled:
+                logger.info("Deferred location update canceled: \(error.localizedDescription)")
+            case .promptDeclined:
+                logger.warning("Location prompt declined: \(error.localizedDescription)")
+            case .historicalLocationError:
+                logger.error("Historical location error: \(error.localizedDescription)")
+            @unknown default:
+                logger.error("Unknown Core Location error: \(error.localizedDescription)")
+            }
+        } else {
+            logger.error("Location service error: \(error.localizedDescription)")
+        }
     }
 }
+
+// MARK: - Debug Helpers
+
+#if DEBUG
+extension LocationService {
+    
+    /**
+     * Debug method to simulate location updates
+     * - Parameter coordinate: The coordinate to simulate
+     */
+    func simulateLocationUpdate(at coordinate: CLLocationCoordinate2D) {
+        let simulatedLocation = CLLocation(
+            latitude: coordinate.latitude,
+            longitude: coordinate.longitude
+        )
+        currentLocation = simulatedLocation
+        logger.debug("Simulated location update: \(coordinate.latitude), \(coordinate.longitude)")
+    }
+    
+    /**
+     * Debug method to reset location service state
+     */
+    func resetForTesting() {
+        currentLocation = nil
+        isAuthorized = false
+        authorizationStatus = .notDetermined
+        stopLocationUpdates()
+        logger.debug("LocationService reset for testing")
+    }
+}
+#endif
