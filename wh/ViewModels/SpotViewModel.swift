@@ -484,14 +484,35 @@ class SpotViewModel: ObservableObject {
     }
     
     /**
-     * Formats distance for display
+     * Formats distance for display with unit conversion based on user preference
+     * - Parameter spot: The spot to calculate distance to
+     * - Parameter userLocation: User's current location (optional)
+     * - Returns: Formatted distance string with appropriate units
+     */
+    func formattedDistance(spot: Spot, from userLocation: CLLocation?) -> String {
+        let fallbackLocation = CLLocation(latitude: 37.7749, longitude: -122.4194)
+        let locationToUse = userLocation ?? fallbackLocation
+        
+        let spotLocation = CLLocation(latitude: spot.latitude, longitude: spot.longitude)
+        let distanceInMeters = locationToUse.distance(from: spotLocation)
+        
+        return formatDistance(distanceInMeters)
+    }
+    
+    /**
+     * Formats distance for display with unit conversion based on user preference
      * - Parameter distance: Distance in meters
-     * - Returns: Formatted distance string
+     * - Returns: Formatted distance string with appropriate units
      */
     func formatDistance(_ distance: Double) -> String {
-        if distance < 1000 {
-            return String(format: "%.0f m", distance)
+        let usesImperialUnits = UserDefaults.standard.bool(forKey: "usesImperialUnits")
+        
+        if usesImperialUnits {
+            // Convert to miles
+            let miles = distance / 1609.34
+            return String(format: "%.1f mi", miles)
         } else {
+            // Convert to kilometers
             let kilometers = distance / 1000
             return String(format: "%.1f km", kilometers)
         }

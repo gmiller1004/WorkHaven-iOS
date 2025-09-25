@@ -431,7 +431,7 @@ public struct SpotListRowView: View {
                 Spacer()
                 
                 VStack(alignment: .trailing, spacing: 4) {
-                    Text(SpotViewModel().formatDistance(distance))
+                    Text(SpotViewModel().formattedDistance(spot: spot, from: userLocation))
                         .font(ThemeManager.SwiftUIFonts.caption)
                         .foregroundColor(ThemeManager.SwiftUIColors.mocha.opacity(0.7))
                     
@@ -511,7 +511,7 @@ public struct SpotListRowView: View {
      * VoiceOver accessibility label
      */
     private var accessibilityLabel: String {
-        let distanceText = SpotViewModel().formatDistance(distance)
+        let distanceText = SpotViewModel().formattedDistance(spot: spot, from: userLocation)
         let ratingText = String(format: "%.1f stars", overallRating)
         let wifiText = "\(Int(spot.wifiRating)) out of 5 WiFi"
         let noiseText = "\(spot.noiseRating) noise level"
