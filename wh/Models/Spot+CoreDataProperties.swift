@@ -67,6 +67,9 @@ extension Spot {
     
     /// One-to-many relationship to user tips for this spot
     @NSManaged public var userTips: NSSet?
+    
+    /// One-to-many relationship to user favorites for this spot
+    @NSManaged public var favorites: NSSet?
 
 }
 
@@ -118,6 +121,23 @@ extension Spot {
 
     @objc(removeUserTips:)
     @NSManaged public func removeFromUserTips(_ values: NSSet)
+
+}
+
+// MARK: Generated accessors for favorites
+extension Spot {
+
+    @objc(addFavoritesObject:)
+    @NSManaged public func addToFavorites(_ value: UserFavorite)
+
+    @objc(removeFavoritesObject:)
+    @NSManaged public func removeFromFavorites(_ value: UserFavorite)
+
+    @objc(addFavorites:)
+    @NSManaged public func addToFavorites(_ values: NSSet)
+
+    @objc(removeFavorites:)
+    @NSManaged public func removeFromFavorites(_ values: NSSet)
 
 }
 

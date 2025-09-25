@@ -9,6 +9,7 @@
 import Foundation
 import CoreData
 import CoreLocation
+import OSLog
 
 /**
  * Spot represents a work-friendly location in the WorkHaven app.
@@ -17,6 +18,8 @@ import CoreLocation
  */
 @objc(Spot)
 public class Spot: NSManagedObject {
+    
+    private let logger = Logger(subsystem: "com.nextsizzle.wh", category: "Spot")
     
     // MARK: - Computed Properties
     
@@ -189,5 +192,70 @@ public class Spot: NSManagedObject {
         }
         
         return errors
+    }
+    
+    // MARK: - Favorite Management
+    
+    /**
+     * Adds this spot to user favorites
+     * - Parameter context: The Core Data context to use
+     * - Returns: The created UserFavorite instance
+     */
+    public func addToFavorites(in context: NSManagedObjectContext) -> UserFavorite {
+        let favorite = UserFavorite.create(for: self, in: context)
+        addToFavorites(favorite)
+        markAsModified()
+        
+        logger.info("Added spot '\(self.name)' to favorites")
+        return favorite
+    }
+    
+    /**
+     * Removes this spot from user favorites
+     * - Parameter context: The Core Data context to use
+     */
+    public func removeFromFavorites(in context: NSManagedObjectContext) {
+        guard let favoritesSet = favorites,
+              let favoritesArray = favoritesSet.allObjects as? [UserFavorite] else {
+            logger.warning("No favorites found for spot '\(self.name)'")
+            return
+        }
+        
+        for favorite in favoritesArray {
+            favorite.removeFavorite()
+        }
+        
+        markAsModified()
+        logger.info("Removed spot '\(self.name)' from favorites")
+    }
+    
+    /**
+     * Checks if this spot is favorited by the user
+     * - Returns: True if the spot has any favorites
+     */
+    public var isFavorited: Bool {
+        guard let favoritesSet = favorites else { return false }
+        return favoritesSet.count > 0
+    }
+    
+    /**
+     * Returns the number of times this spot has been favorited
+     * - Returns: Count of favorites for this spot
+     */
+    public var favoriteCount: Int {
+        return favorites?.count ?? 0
+    }
+    
+    /**
+     * Returns the most recent favorite timestamp
+     * - Returns: The timestamp of the most recent favorite, or nil if not favorited
+     */
+    public var lastFavorited: Date? {
+        guard let favoritesSet = favorites,
+              let favoritesArray = favoritesSet.allObjects as? [UserFavorite] else {
+            return nil
+        }
+        
+        return favoritesArray.map { $0.timestamp }.max()
     }
 }

@@ -17,6 +17,7 @@
         <relationship name="userRatings" optional="YES" toMany="YES" deletionRule="Cascade" destinationEntity="UserRating" inverseName="spot" inverseEntity="UserRating"/>
         <relationship name="photos" optional="YES" toMany="YES" deletionRule="Cascade" destinationEntity="Photo" inverseName="spot" inverseEntity="Photo"/>
         <relationship name="userTips" optional="YES" toMany="YES" deletionRule="Cascade" destinationEntity="UserTip" inverseName="spot" inverseEntity="UserTip"/>
+        <relationship name="favorites" optional="YES" toMany="YES" deletionRule="Cascade" destinationEntity="UserFavorite" inverseName="spot" inverseEntity="UserFavorite"/>
     </entity>
         <entity name="UserRating" representedClassName="UserRating" syncable="YES" codeGenerationType="none">
         <attribute name="wifi" optional="NO" attributeType="Integer 16" defaultValueString="0"/>
@@ -42,10 +43,16 @@
         <attribute name="cloudKitRecordID" optional="NO" attributeType="String" defaultValueString=""/>
         <relationship name="spot" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="Spot" inverseName="userTips" inverseEntity="Spot"/>
     </entity>
+        <entity name="UserFavorite" representedClassName="UserFavorite" syncable="YES" codeGenerationType="none">
+        <attribute name="timestamp" optional="NO" attributeType="Date" defaultValueString="0.0"/>
+        <attribute name="cloudKitRecordID" optional="NO" attributeType="String" defaultValueString=""/>
+        <relationship name="spot" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="Spot" inverseName="favorites" inverseEntity="Spot"/>
+    </entity>
     <elements>
         <element name="Spot" positionX="-63" positionY="-18" width="128" height="179"/>
         <element name="UserRating" positionX="-18" positionY="-18" width="128" height="104"/>
         <element name="Photo" positionX="27" positionY="-18" width="128" height="89"/>
         <element name="UserTip" positionX="72" positionY="-18" width="128" height="89"/>
+        <element name="UserFavorite" positionX="117" positionY="-18" width="128" height="89"/>
     </elements>
 </model>
