@@ -61,6 +61,9 @@ extension Spot {
     
     /// One-to-many relationship to photos for this spot
     @NSManaged public var photos: NSSet?
+    
+    /// One-to-many relationship to user tips for this spot
+    @NSManaged public var userTips: NSSet?
 
 }
 
@@ -95,6 +98,23 @@ extension Spot {
 
     @objc(removePhotos:)
     @NSManaged public func removeFromPhotos(_ values: NSSet)
+
+}
+
+// MARK: Generated accessors for userTips
+extension Spot {
+
+    @objc(addUserTipsObject:)
+    @NSManaged public func addToUserTips(_ value: UserTip)
+
+    @objc(removeUserTipsObject:)
+    @NSManaged public func removeFromUserTips(_ value: UserTip)
+
+    @objc(addUserTips:)
+    @NSManaged public func addToUserTips(_ values: NSSet)
+
+    @objc(removeUserTips:)
+    @NSManaged public func removeFromUserTips(_ values: NSSet)
 
 }
 
