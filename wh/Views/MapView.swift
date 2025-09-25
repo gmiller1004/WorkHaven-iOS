@@ -78,7 +78,20 @@ struct MapView: View {
                     mapContent
                 }
                 
-                // Search Here button overlay
+                // Location button overlay (top-right)
+                VStack {
+                    HStack {
+                        Spacer()
+                        
+                        locationButton
+                            .padding(.trailing, ThemeManager.Spacing.md)
+                            .padding(.top, ThemeManager.Spacing.lg)
+                    }
+                    
+                    Spacer()
+                }
+                
+                // Search Here button overlay (bottom-center)
                 VStack {
                     Spacer()
                     
@@ -205,6 +218,33 @@ struct MapView: View {
     }
     
     /**
+     * Location button to recenter map on user location
+     */
+    private var locationButton: some View {
+        Button(action: {
+            recenterOnUserLocation()
+        }) {
+            Image(systemName: "location.fill")
+                .font(.system(size: 20, weight: .medium))
+                .foregroundColor(ThemeManager.SwiftUIColors.coral)
+                .frame(width: 44, height: 44)
+                .background(
+                    Circle()
+                        .fill(ThemeManager.SwiftUIColors.latte)
+                        .shadow(
+                            color: ThemeManager.SwiftUIColors.mocha.opacity(0.2),
+                            radius: 4,
+                            x: 0,
+                            y: 2
+                        )
+                )
+        }
+        .disabled(locationService.currentLocation == nil)
+        .accessibilityLabel("Location button")
+        .accessibilityHint("Center map on your current location")
+    }
+    
+    /**
      * Search Here button overlay
      */
     private var searchHereButton: some View {
@@ -295,6 +335,29 @@ struct MapView: View {
         default:
             return "questionmark.circle.fill"
         }
+    }
+    
+    /**
+     * Recenters the map on the user's current location
+     */
+    private func recenterOnUserLocation() {
+        guard let userLocation = locationService.currentLocation else {
+            logger.warning("Cannot recenter map: user location not available")
+            return
+        }
+        
+        logger.info("Recenter button tapped, moving to user location: \(userLocation.coordinate.latitude), \(userLocation.coordinate.longitude)")
+        
+        // Update map region to center on user location
+        withAnimation(.easeInOut(duration: 0.5)) {
+            mapRegion = MKCoordinateRegion(
+                center: userLocation.coordinate,
+                span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01) // Zoomed in view
+            )
+        }
+        
+        // Also update the SpotViewModel's map region for consistency
+        spotViewModel.currentMapRegion = mapRegion
     }
     
     /**
