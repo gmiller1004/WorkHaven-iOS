@@ -10,6 +10,7 @@ import Foundation
 import CoreLocation
 import CoreData
 import SwiftUI
+import MapKit
 import OSLog
 
 /**
@@ -33,6 +34,9 @@ class SpotViewModel: ObservableObject {
     
     /// Error message for user feedback
     @Published var errorMessage: String?
+    
+    /// Current map region for MapView state management
+    @Published var currentMapRegion: MKCoordinateRegion?
     
     // MARK: - Private Properties
     
@@ -147,6 +151,84 @@ class SpotViewModel: ObservableObject {
         lastCacheUpdate = nil
         errorMessage = nil
         logger.info("Cleared all spots from view model")
+    }
+    
+    /**
+     * Searches for spots at a specific map location with "Search Here" functionality
+     * Queries Core Data for spots within radius, and if fewer than 5 spots found,
+     * triggers spot discovery to find new spots in the area
+     * - Parameter center: The center coordinate to search around
+     * - Parameter radius: Search radius in meters (default: 20 miles)
+     */
+    func searchHere(at center: CLLocationCoordinate2D, radius: Double = 32186.88) async {
+        logger.info("Searching for spots at \(center.latitude), \(center.longitude) with radius \(radius)m")
+        
+        // Clear any previous errors
+        errorMessage = nil
+        isSeeding = true
+        discoveryProgress = "Searching for spots..."
+        
+        do {
+            // Convert coordinate to CLLocation for distance calculations
+            let centerLocation = CLLocation(latitude: center.latitude, longitude: center.longitude)
+            
+            // Query Core Data for spots within radius
+            let existingSpots = try await fetchExistingSpots(near: centerLocation)
+            
+            logger.info("Found \(existingSpots.count) existing spots within radius")
+            
+            // If we have fewer than 5 spots, discover new ones
+            if existingSpots.count < 5 {
+                logger.info("Fewer than 5 spots found, discovering new spots in area")
+                discoveryProgress = "Discovering new spots..."
+                
+                // Discover new spots at the specified location
+                let discoveredSpots = await spotDiscoveryService.discoverSpots(near: centerLocation, radius: radius)
+                
+                // Combine existing and newly discovered spots
+                let allSpots = existingSpots + discoveredSpots
+                
+                // Sort by distance from center then by overall rating
+                let sortedSpots = sortSpots(allSpots, from: centerLocation)
+                
+                await MainActor.run {
+                    self.spots = sortedSpots
+                    self.isSeeding = false
+                    self.discoveryProgress = ""
+                }
+                
+                logger.info("Successfully discovered and loaded \(sortedSpots.count) spots")
+            } else {
+                logger.info("Sufficient spots found, using existing spots")
+                
+                // Sort existing spots by distance from center then by overall rating
+                let sortedSpots = sortSpots(existingSpots, from: centerLocation)
+                
+                await MainActor.run {
+                    self.spots = sortedSpots
+                    self.isSeeding = false
+                    self.discoveryProgress = ""
+                }
+                
+                logger.info("Using \(sortedSpots.count) existing spots")
+            }
+            
+            // Update the map region to center on the search location
+            await MainActor.run {
+                self.currentMapRegion = MKCoordinateRegion(
+                    center: center,
+                    span: MKCoordinateSpan(latitudeDelta: 0.05, longitudeDelta: 0.05)
+                )
+            }
+            
+        } catch {
+            logger.error("Failed to search for spots: \(error.localizedDescription)")
+            await MainActor.run {
+                self.errorMessage = "Failed to search for spots: \(error.localizedDescription)"
+                self.isSeeding = false
+                self.discoveryProgress = ""
+            }
+        }
     }
     
     /**
