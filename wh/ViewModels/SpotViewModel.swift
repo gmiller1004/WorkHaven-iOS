@@ -163,14 +163,24 @@ class SpotViewModel: ObservableObject {
     }
     
     /**
-     * Searches for spots at a specific map location with "Search Here" functionality
-     * Queries Core Data for spots within radius, and if fewer than 5 spots found,
+     * Searches for spots at a specific map location with zoom-based "Search Here" functionality
+     * Calculates radius from map span, queries Core Data for spots within radius, and if fewer than threshold spots found,
      * triggers spot discovery to find new spots in the area
      * - Parameter center: The center coordinate to search around
-     * - Parameter radius: Search radius in meters (default: 5 miles / 8 km)
+     * - Parameter span: The map's coordinate span to calculate radius from
+     * - Parameter threshold: Minimum number of spots to find before triggering discovery (default: 5)
      */
-    func searchHere(at center: CLLocationCoordinate2D, radius: Double = 8046.72) async {
-        logger.info("Searching for spots at \(center.latitude), \(center.longitude) with radius \(radius)m")
+    func searchHere(at center: CLLocationCoordinate2D, span: MKCoordinateSpan, threshold: Int = 5) async {
+        // Calculate radius from map span (latitudeDelta * 111000 / 2 meters)
+        // 111000 meters = approximate meters per degree of latitude
+        let calculatedRadius = span.latitudeDelta * 111000.0 / 2.0
+        
+        // Apply min/max constraints: min 1 mile (1609.34m), max 20 miles (32186.88m)
+        let minRadius: Double = 1609.34  // 1 mile
+        let maxRadius: Double = 32186.88 // 20 miles
+        let radius = max(minRadius, min(maxRadius, calculatedRadius))
+        
+        logger.info("Searching for spots at \(center.latitude), \(center.longitude) with calculated radius \(radius)m (span: \(span.latitudeDelta))")
         
         // Clear any previous errors
         errorMessage = nil
@@ -182,20 +192,25 @@ class SpotViewModel: ObservableObject {
             let centerLocation = CLLocation(latitude: center.latitude, longitude: center.longitude)
             
             // Query Core Data for spots within radius
-            let existingSpots = try await fetchExistingSpots(near: centerLocation)
+            let existingSpots = try await fetchExistingSpotsWithRadius(near: centerLocation, radius: radius)
             
             logger.info("Found \(existingSpots.count) existing spots within radius")
             
-            // If we have fewer than 5 spots, discover new ones
-            if existingSpots.count < 5 {
-                logger.info("Fewer than 5 spots found, discovering new spots in area")
+            // If we have fewer than threshold spots, discover new ones
+            if existingSpots.count < threshold {
+                logger.info("Fewer than \(threshold) spots found, discovering new spots in area")
                 discoveryProgress = "Discovering new spots..."
                 
                 // Discover new spots at the specified location
                 let discoveredSpots = await spotDiscoveryService.discoverSpots(near: centerLocation, radius: radius)
                 
+                // Deduplicate discovered spots against existing ones
+                let deduplicatedSpots = deduplicateSpots(discoveredSpots, against: existingSpots)
+                
+                logger.info("Discovered \(discoveredSpots.count) spots, \(deduplicatedSpots.count) new after deduplication")
+                
                 // Combine existing and newly discovered spots
-                let allSpots = existingSpots + discoveredSpots
+                let allSpots = existingSpots + deduplicatedSpots
                 
                 // Sort by distance from center then by overall rating
                 let sortedSpots = sortSpots(allSpots, from: centerLocation)
@@ -204,6 +219,11 @@ class SpotViewModel: ObservableObject {
                     self.spots = sortedSpots
                     self.isSeeding = false
                     self.discoveryProgress = ""
+                    
+                    // If we still have fewer than threshold spots and no new spots were added
+                    if allSpots.count < threshold && deduplicatedSpots.isEmpty {
+                        self.errorMessage = "No additional work spots have been found, try zooming out or changing locations."
+                    }
                 }
                 
                 logger.info("Successfully discovered and loaded \(sortedSpots.count) spots")
@@ -222,11 +242,11 @@ class SpotViewModel: ObservableObject {
                 logger.info("Using \(sortedSpots.count) existing spots")
             }
             
-            // Update the map region to center on the search location
+            // Update the map region to center on the search location with the provided span
             await MainActor.run {
                 self.currentMapRegion = MKCoordinateRegion(
                     center: center,
-                    span: MKCoordinateSpan(latitudeDelta: 0.05, longitudeDelta: 0.05)
+                    span: span
                 )
             }
             
@@ -337,6 +357,90 @@ class SpotViewModel: ObservableObject {
             logger.error("Failed to fetch existing spots: \(error.localizedDescription)")
             throw error
         }
+    }
+    
+    /**
+     * Fetches existing spots from Core Data within a specific radius
+     * - Parameter near: The center point for spot querying
+     * - Parameter radius: The search radius in meters
+     * - Returns: Array of spots within the radius
+     */
+    private func fetchExistingSpotsWithRadius(near: CLLocation, radius: Double) async throws -> [Spot] {
+        let context = persistenceController.container.viewContext
+        let request: NSFetchRequest<Spot> = Spot.fetchRequest()
+        
+        // Create a bounding box for efficient querying within the specified radius
+        let latRange = radius / 111000.0 // Rough conversion to degrees
+        let lngRange = radius / (111000.0 * cos(near.coordinate.latitude * .pi / 180))
+        
+        let minLat = near.coordinate.latitude - latRange
+        let maxLat = near.coordinate.latitude + latRange
+        let minLng = near.coordinate.longitude - lngRange
+        let maxLng = near.coordinate.longitude + lngRange
+        
+        request.predicate = NSPredicate(
+            format: "latitude >= %f AND latitude <= %f AND longitude >= %f AND longitude <= %f",
+            minLat, maxLat, minLng, maxLng
+        )
+        
+        do {
+            let fetchedSpots = try context.fetch(request)
+            
+            // Filter by actual distance to get precise results within the radius
+            let nearbySpots = fetchedSpots.filter { spot in
+                let spotLocation = CLLocation(latitude: spot.latitude, longitude: spot.longitude)
+                return near.distance(from: spotLocation) <= radius
+            }
+            
+            logger.info("Fetched \(nearbySpots.count) existing spots from Core Data within \(radius)m radius")
+            
+            return nearbySpots
+            
+        } catch {
+            logger.error("Failed to fetch existing spots with radius: \(error.localizedDescription)")
+            throw error
+        }
+    }
+    
+    /**
+     * Deduplicates discovered spots against existing spots by address and proximity
+     * - Parameter discoveredSpots: Newly discovered spots to deduplicate
+     * - Parameter existingSpots: Existing spots to check against
+     * - Returns: Array of spots that are not duplicates
+     */
+    private func deduplicateSpots(_ discoveredSpots: [Spot], against existingSpots: [Spot]) -> [Spot] {
+        var uniqueSpots: [Spot] = []
+        
+        for discoveredSpot in discoveredSpots {
+            var isDuplicate = false
+            
+            for existingSpot in existingSpots {
+                // Check by address similarity
+                let discoveredAddress = (discoveredSpot.address ?? "").lowercased()
+                let existingAddress = (existingSpot.address ?? "").lowercased()
+                
+                if discoveredAddress == existingAddress {
+                    isDuplicate = true
+                    break
+                }
+                
+                // Check by proximity (< 100m)
+                let discoveredLocation = CLLocation(latitude: discoveredSpot.latitude, longitude: discoveredSpot.longitude)
+                let existingLocation = CLLocation(latitude: existingSpot.latitude, longitude: existingSpot.longitude)
+                
+                if discoveredLocation.distance(from: existingLocation) < 100 {
+                    isDuplicate = true
+                    break
+                }
+            }
+            
+            if !isDuplicate {
+                uniqueSpots.append(discoveredSpot)
+            }
+        }
+        
+        logger.info("Deduplicated \(discoveredSpots.count) spots, \(uniqueSpots.count) unique spots remain")
+        return uniqueSpots
     }
     
     /**
