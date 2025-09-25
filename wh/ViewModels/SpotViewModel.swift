@@ -103,6 +103,15 @@ class SpotViewModel: ObservableObject {
                 await MainActor.run {
                     self.spots = self.sortSpots(existingSpots, from: near)
                     self.isSeeding = false
+                    
+                    // Update map region to center on the location used for loading spots
+                    if let location = near {
+                        self.currentMapRegion = MKCoordinateRegion(
+                            center: location.coordinate,
+                            span: MKCoordinateSpan(latitudeDelta: 0.05, longitudeDelta: 0.05)
+                        )
+                        logger.info("Updated map region to center on \(location.coordinate.latitude), \(location.coordinate.longitude)")
+                    }
                 }
             }
             
@@ -392,6 +401,13 @@ class SpotViewModel: ObservableObject {
             self.spots = sortedSpots
             self.isSeeding = false
             self.discoveryProgress = ""
+            
+            // Update map region to center on the discovery location
+            self.currentMapRegion = MKCoordinateRegion(
+                center: near.coordinate,
+                span: MKCoordinateSpan(latitudeDelta: 0.05, longitudeDelta: 0.05)
+            )
+            logger.info("Updated map region to center on discovery location \(near.coordinate.latitude), \(near.coordinate.longitude)")
         }
         
         logger.info("Successfully loaded \(sortedSpots.count) spots")
