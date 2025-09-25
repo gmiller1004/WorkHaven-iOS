@@ -289,7 +289,7 @@ struct MapView: View {
         logger.info("Search Here button tapped at \(mapRegion.center.latitude), \(mapRegion.center.longitude)")
         
         Task {
-            await spotViewModel.searchHere(at: mapRegion.center, radius: 32186.88) // 20 miles in meters
+            await spotViewModel.searchHere(at: mapRegion.center, radius: 8046.72) // 5 miles in meters
         }
     }
 }

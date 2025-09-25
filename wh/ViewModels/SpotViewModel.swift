@@ -167,9 +167,9 @@ class SpotViewModel: ObservableObject {
      * Queries Core Data for spots within radius, and if fewer than 5 spots found,
      * triggers spot discovery to find new spots in the area
      * - Parameter center: The center coordinate to search around
-     * - Parameter radius: Search radius in meters (default: 20 miles)
+     * - Parameter radius: Search radius in meters (default: 5 miles / 8 km)
      */
-    func searchHere(at center: CLLocationCoordinate2D, radius: Double = 32186.88) async {
+    func searchHere(at center: CLLocationCoordinate2D, radius: Double = 8046.72) async {
         logger.info("Searching for spots at \(center.latitude), \(center.longitude) with radius \(radius)m")
         
         // Clear any previous errors
