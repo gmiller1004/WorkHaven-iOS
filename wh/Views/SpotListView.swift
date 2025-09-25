@@ -387,15 +387,40 @@ public struct SpotListRowView: View {
         return tempViewModel.calculateOverallRating(for: spot)
     }
     
+    /**
+     * Returns the appropriate SF Symbol icon based on spot type
+     */
+    private var typeIcon: String {
+        switch spot.type.lowercased() {
+        case "coffee":
+            return "cup.and.saucer.fill"
+        case "park":
+            return "tree.fill"
+        case "library":
+            return "book.fill"
+        case "coworking":
+            return "deskclock.fill"
+        default:
+            return "questionmark.circle.fill"
+        }
+    }
+    
     public var body: some View {
         VStack(alignment: .leading, spacing: ThemeManager.Spacing.sm) {
-            // Header with name and distance
+            // Header with type icon, name and distance
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(spot.name)
-                        .font(ThemeManager.SwiftUIFonts.headline)
-                        .foregroundColor(ThemeManager.SwiftUIColors.mocha)
-                        .lineLimit(1)
+                    HStack(spacing: ThemeManager.Spacing.sm) {
+                        // Type-specific icon
+                        Image(systemName: typeIcon)
+                            .font(.system(size: 18))
+                            .foregroundColor(ThemeManager.SwiftUIColors.coral)
+                        
+                        Text(spot.name)
+                            .font(ThemeManager.SwiftUIFonts.headline)
+                            .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+                            .lineLimit(1)
+                    }
                     
                     Text(spot.address)
                         .font(ThemeManager.SwiftUIFonts.caption)
@@ -491,8 +516,27 @@ public struct SpotListRowView: View {
         let wifiText = "\(Int(spot.wifiRating)) out of 5 WiFi"
         let noiseText = "\(spot.noiseRating) noise level"
         let outletsText = spot.outlets ? "has outlets" : "no outlets"
+        let typeText = spotTypeDescription
         
-        return "\(spot.name), \(distanceText), \(ratingText), \(wifiText), \(noiseText), \(outletsText)"
+        return "\(typeText), \(spot.name), \(distanceText), \(ratingText), \(wifiText), \(noiseText), \(outletsText)"
+    }
+    
+    /**
+     * Returns a human-readable description of the spot type
+     */
+    private var spotTypeDescription: String {
+        switch spot.type.lowercased() {
+        case "coffee":
+            return "Coffee shop"
+        case "park":
+            return "Park"
+        case "library":
+            return "Library"
+        case "coworking":
+            return "Co-working space"
+        default:
+            return "Work spot"
+        }
     }
 }
 
