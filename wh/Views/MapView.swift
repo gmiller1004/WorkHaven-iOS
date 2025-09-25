@@ -26,6 +26,7 @@ struct MapView: View {
     @ObservedObject private var locationService = LocationService.shared
     
     @State private var mapRegion: MKCoordinateRegion
+    @State private var showingError = false
     
     private let logger = Logger(subsystem: "com.nextsizzle.wh", category: "MapView")
     
@@ -104,6 +105,20 @@ struct MapView: View {
                 if let newRegion = newRegion {
                     mapRegion = newRegion
                 }
+            }
+            .onChange(of: spotViewModel.errorMessage) { errorMessage in
+                if errorMessage != nil {
+                    showingError = true
+                }
+            }
+            .alert("Search Error", isPresented: $showingError) {
+                Button("OK", role: .cancel) {
+                    spotViewModel.clearError()
+                }
+                .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+            } message: {
+                Text(spotViewModel.errorMessage ?? "An error occurred while searching for spots")
+                    .foregroundColor(ThemeManager.SwiftUIColors.mocha)
             }
         }
     }
@@ -283,13 +298,13 @@ struct MapView: View {
     }
     
     /**
-     * Searches for spots at the current map center location
+     * Searches for spots at the current map center location with zoom-based radius
      */
     private func searchHere() {
-        logger.info("Search Here button tapped at \(mapRegion.center.latitude), \(mapRegion.center.longitude)")
+        logger.info("Search Here button tapped at \(mapRegion.center.latitude), \(mapRegion.center.longitude) with span: \(mapRegion.span.latitudeDelta)")
         
         Task {
-            await spotViewModel.searchHere(at: mapRegion.center, span: mapRegion.span)
+            await spotViewModel.searchHere(at: mapRegion.center, span: mapRegion.span, threshold: 5)
         }
     }
 }
