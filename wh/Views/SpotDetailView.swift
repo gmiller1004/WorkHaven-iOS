@@ -35,6 +35,11 @@ struct SpotDetailView: View {
     @State private var showFlagConfirmation = false
     @State private var flaggedPhoto: Photo?
     
+    // User tips state
+    @State private var newTipText = ""
+    @State private var showTipConfirmation = false
+    @State private var showAllTips = false
+    
     // User rating form state
     @State private var wifiRating: Double = 3.0
     @State private var noiseLevel = "Medium"
@@ -60,6 +65,7 @@ struct SpotDetailView: View {
                     ratingsSection
                     userRatingFormSection
                     tipsSection
+                    userTipsSection
                     photoGallerySection
                 }
                 .padding()
@@ -99,6 +105,14 @@ struct SpotDetailView: View {
                 }
             } message: {
                 Text("Are you sure you want to flag this photo as inappropriate? This action cannot be undone.")
+            }
+            .alert("Submit Tip", isPresented: $showTipConfirmation) {
+                Button("Cancel", role: .cancel) { }
+                Button("Submit", role: .none) {
+                    submitTip()
+                }
+            } message: {
+                Text("Are you sure you want to submit this tip?")
             }
         }
     }
@@ -298,6 +312,76 @@ struct SpotDetailView: View {
                 .background(ThemeManager.SwiftUIColors.latte)
                 .cornerRadius(8)
                 .accessibilityLabel("Tips: \(spot.tips)")
+        }
+    }
+    
+    // MARK: - User Tips Section
+    
+    private var userTipsSection: some View {
+        VStack(alignment: .leading, spacing: ThemeManager.Spacing.sm) {
+            Text("User Tips")
+                .font(ThemeManager.SwiftUIFonts.headline)
+                .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+                .accessibilityAddTraits(.isHeader)
+            
+            // Tip submission form
+            VStack(alignment: .leading, spacing: ThemeManager.Spacing.sm) {
+                TextField("Add your tip...", text: $newTipText, axis: .vertical)
+                    .font(ThemeManager.SwiftUIFonts.body)
+                    .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+                    .padding()
+                    .background(ThemeManager.SwiftUIColors.latte)
+                    .cornerRadius(8)
+                    .lineLimit(3...6)
+                    .accessibilityLabel("Tip text field")
+                
+                Button("Submit Tip") {
+                    if !newTipText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        showTipConfirmation = true
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(ThemeManager.SwiftUIColors.mocha)
+                .foregroundColor(ThemeManager.SwiftUIColors.latte)
+                .disabled(newTipText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .accessibilityLabel("Submit tip button")
+            }
+            
+            // Display user tips
+            if let userTips = spot.userTips as? Set<UserTip>, !userTips.isEmpty {
+                let sortedTips = Array(userTips).sorted { tip1, tip2 in
+                    let score1 = tip1.likes - tip1.dislikes
+                    let score2 = tip2.likes - tip2.dislikes
+                    return score1 > score2
+                }
+                
+                let displayedTips = showAllTips ? sortedTips : Array(sortedTips.prefix(5))
+                
+                VStack(alignment: .leading, spacing: ThemeManager.Spacing.sm) {
+                    ForEach(Array(displayedTips.enumerated()), id: \.element.objectID) { index, tip in
+                        userTipRow(tip: tip, index: index)
+                    }
+                    
+                    if sortedTips.count > 5 {
+                        Button(showAllTips ? "Show Less" : "Show More") {
+                            showAllTips.toggle()
+                        }
+                        .font(ThemeManager.SwiftUIFonts.caption)
+                        .foregroundColor(ThemeManager.SwiftUIColors.coral)
+                        .accessibilityLabel(showAllTips ? "Show less tips button" : "Show more tips button")
+                    }
+                }
+            } else {
+                Text("No user tips yet. Be the first to add one!")
+                    .font(ThemeManager.SwiftUIFonts.body)
+                    .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+                    .italic()
+                    .padding()
+                    .frame(maxWidth: .infinity)
+                    .background(ThemeManager.SwiftUIColors.latte)
+                    .cornerRadius(8)
+                    .accessibilityLabel("No user tips available")
+            }
         }
     }
     
@@ -689,6 +773,84 @@ struct SpotDetailView: View {
         } catch {
             logger.error("Failed to save context: \(error.localizedDescription)")
             showError("Failed to save changes: \(error.localizedDescription)")
+        }
+    }
+    
+    // MARK: - User Tips Helper Methods
+    
+    private func userTipRow(tip: UserTip, index: Int) -> some View {
+        VStack(alignment: .leading, spacing: ThemeManager.Spacing.xs) {
+            HStack(alignment: .top, spacing: ThemeManager.Spacing.sm) {
+                VStack(alignment: .leading, spacing: ThemeManager.Spacing.xs) {
+                    Text(tip.text)
+                        .font(ThemeManager.SwiftUIFonts.body)
+                        .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+                        .multilineTextAlignment(.leading)
+                    
+                    HStack(spacing: ThemeManager.Spacing.sm) {
+                        Text(tip.likesDislikesString)
+                            .font(ThemeManager.SwiftUIFonts.caption)
+                            .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+                        
+                        Text("•")
+                            .font(ThemeManager.SwiftUIFonts.caption)
+                            .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+                        
+                        Text(tip.formattedTimestamp)
+                            .font(ThemeManager.SwiftUIFonts.caption)
+                            .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+                    }
+                }
+                
+                Spacer()
+                
+                HStack(spacing: ThemeManager.Spacing.sm) {
+                    Button(action: {
+                        tip.addLike()
+                        saveContext()
+                    }) {
+                        Image(systemName: "hand.thumbsup")
+                            .font(.caption)
+                            .foregroundColor(ThemeManager.SwiftUIColors.coral)
+                    }
+                    .accessibilityLabel("Thumbs up button")
+                    
+                    Button(action: {
+                        tip.addDislike()
+                        saveContext()
+                    }) {
+                        Image(systemName: "hand.thumbsdown")
+                            .font(.caption)
+                            .foregroundColor(ThemeManager.SwiftUIColors.coral)
+                    }
+                    .accessibilityLabel("Thumbs down button")
+                }
+            }
+        }
+        .padding(ThemeManager.Spacing.sm)
+        .background(ThemeManager.SwiftUIColors.latte)
+        .cornerRadius(8)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("User tip: \(tip.text), \(tip.likesDislikesString), thumbs up button, thumbs down button")
+    }
+    
+    private func submitTip() {
+        let trimmedText = newTipText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedText.isEmpty else { return }
+        
+        do {
+            let userTip = UserTip.create(text: trimmedText, spot: spot, in: viewContext)
+            spot.addToUserTips(userTip)
+            
+            try viewContext.save()
+            logger.info("Successfully submitted tip: \(trimmedText)")
+            
+            // Clear the text field
+            newTipText = ""
+            
+        } catch {
+            logger.error("Failed to submit tip: \(error.localizedDescription)")
+            showError("Failed to submit tip: \(error.localizedDescription)")
         }
     }
     
