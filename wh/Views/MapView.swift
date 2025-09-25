@@ -1,0 +1,199 @@
+//
+//  MapView.swift
+//  WorkHaven
+//
+//  Created by WorkHaven Team on 2024
+//  Copyright © 2024 WorkHaven. All rights reserved.
+//
+
+import SwiftUI
+import MapKit
+import CoreLocation
+import OSLog
+
+/**
+ * MapView displays work spots on a MapKit map with comprehensive location information.
+ * Features dynamic spot loading from SpotViewModel, user location integration, and accessibility support.
+ * Uses @ObservedObject SpotViewModel for spots data and @ObservedObject LocationService for user location.
+ * Implements ThemeManager for consistent styling with coral annotation pins and latte background.
+ */
+struct MapView: View {
+    
+    // MARK: - Properties
+    
+    @ObservedObject var spotViewModel: SpotViewModel
+    @ObservedObject private var locationService = LocationService.shared
+    
+    private let logger = Logger(subsystem: "com.nextsizzle.wh", category: "MapView")
+    
+    // MARK: - Computed Properties
+    
+    /**
+     * Initial map region centered on user location or fallback to San Francisco
+     */
+    private var initialRegion: MKCoordinateRegion {
+        let fallbackLocation = CLLocation(latitude: 37.7749, longitude: -122.4194)
+        let centerLocation = locationService.currentLocation ?? fallbackLocation
+        
+        if locationService.currentLocation == nil {
+            logger.debug("User location not available, using fallback location for map center")
+        }
+        
+        return MKCoordinateRegion(
+            center: centerLocation.coordinate,
+            span: MKCoordinateSpan(latitudeDelta: 0.05, longitudeDelta: 0.05)
+        )
+    }
+    
+    /**
+     * Map annotations for each spot
+     */
+    private var mapAnnotations: [MapAnnotationItem] {
+        return spotViewModel.spots.map { spot in
+            MapAnnotationItem(
+                coordinate: CLLocationCoordinate2D(latitude: spot.latitude, longitude: spot.longitude),
+                title: spot.name
+            )
+        }
+    }
+    
+    // MARK: - Body
+    
+    var body: some View {
+        NavigationView {
+            ZStack {
+                // Background
+                ThemeManager.SwiftUIColors.latte
+                    .ignoresSafeArea()
+                
+                if spotViewModel.spots.isEmpty {
+                    // Empty state
+                    emptyStateView
+                } else {
+                    // Map with spots
+                    mapContent
+                }
+            }
+            .navigationTitle("Map")
+            .navigationBarTitleDisplayMode(.large)
+            .background(ThemeManager.SwiftUIColors.latte)
+        }
+    }
+    
+    // MARK: - Views
+    
+    /**
+     * Main map content with annotations
+     */
+    private var mapContent: some View {
+        Map(coordinateRegion: .constant(initialRegion), annotationItems: mapAnnotations) { annotation in
+            MapAnnotation(coordinate: annotation.coordinate) {
+                VStack(spacing: 2) {
+                    // Custom annotation pin
+                    ZStack {
+                        // Pin background
+                        Circle()
+                            .fill(ThemeManager.SwiftUIColors.coral)
+                            .frame(width: 30, height: 30)
+                            .shadow(color: .black.opacity(0.3), radius: 2, x: 0, y: 1)
+                        
+                        // Pin icon based on spot type
+                        Image(systemName: typeIcon(for: annotation))
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundColor(.white)
+                    }
+                    
+                    // Spot name label
+                    Text(annotation.title)
+                        .font(ThemeManager.SwiftUIFonts.caption)
+                        .fontWeight(.medium)
+                        .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(
+                            RoundedRectangle(cornerRadius: 4)
+                                .fill(ThemeManager.SwiftUIColors.latte)
+                                .shadow(color: .black.opacity(0.1), radius: 1, x: 0, y: 1)
+                        )
+                        .lineLimit(1)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+        .accessibilityLabel("Map showing \(spotViewModel.spots.count) spots")
+        .accessibilityHint("Tap on pins to view spot details")
+    }
+    
+    /**
+     * Empty state when no spots are available
+     */
+    private var emptyStateView: some View {
+        VStack(spacing: ThemeManager.Spacing.md) {
+            Image(systemName: "map")
+                .font(.system(size: 48))
+                .foregroundColor(ThemeManager.SwiftUIColors.coral.opacity(0.6))
+                .accessibilityHidden(true)
+            
+            Text("No Spots Available")
+                .font(ThemeManager.SwiftUIFonts.title)
+                .fontWeight(.semibold)
+                .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+                .accessibilityAddTraits(.isHeader)
+            
+            Text("Work spots will appear on the map once they're discovered in your area.")
+                .font(ThemeManager.SwiftUIFonts.body)
+                .foregroundColor(ThemeManager.SwiftUIColors.mocha.opacity(0.7))
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, ThemeManager.Spacing.lg)
+                .accessibilityLabel("No work spots available. Spots will appear on the map once discovered in your area.")
+        }
+        .padding(ThemeManager.Spacing.lg)
+        .background(
+            RoundedRectangle(cornerRadius: ThemeManager.CornerRadius.medium)
+                .fill(Color.white)
+                .shadow(
+                    color: ThemeManager.SwiftUIColors.mocha.opacity(0.1),
+                    radius: 4,
+                    x: 0,
+                    y: 2
+                )
+        )
+        .padding(.horizontal, ThemeManager.Spacing.lg)
+    }
+    
+    // MARK: - Helper Methods
+    
+    /**
+     * Returns the appropriate icon for a spot type
+     */
+    private func typeIcon(for annotation: MapAnnotationItem) -> String {
+        // Find the spot that matches this annotation
+        guard let spot = spotViewModel.spots.first(where: { 
+            $0.name == annotation.title && 
+            $0.latitude == annotation.coordinate.latitude && 
+            $0.longitude == annotation.coordinate.longitude 
+        }) else {
+            return "questionmark.circle.fill"
+        }
+        
+        switch spot.type.lowercased() {
+        case "coffee":
+            return "cup.and.saucer.fill"
+        case "park":
+            return "tree.fill"
+        case "library":
+            return "book.fill"
+        case "coworking":
+            return "deskclock.fill"
+        default:
+            return "questionmark.circle.fill"
+        }
+    }
+}
+
+
+// MARK: - Preview
+
+#Preview {
+    MapView(spotViewModel: SpotViewModel())
+}
