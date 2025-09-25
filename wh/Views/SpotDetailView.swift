@@ -121,11 +121,19 @@ struct SpotDetailView: View {
     
     private var headerSection: some View {
         VStack(alignment: .leading, spacing: ThemeManager.Spacing.sm) {
-            Text(spot.name)
-                .font(ThemeManager.SwiftUIFonts.title)
-                .fontWeight(.bold)
-                .foregroundColor(ThemeManager.SwiftUIColors.mocha)
-                .accessibilityLabel("Spot name: \(spot.name)")
+            HStack(spacing: ThemeManager.Spacing.sm) {
+                // Type-specific icon
+                Image(systemName: typeIcon)
+                    .font(.system(size: 24))
+                    .foregroundColor(ThemeManager.SwiftUIColors.coral)
+                    .accessibilityHidden(true)
+                
+                Text(spot.name)
+                    .font(ThemeManager.SwiftUIFonts.title)
+                    .fontWeight(.bold)
+                    .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+                    .accessibilityLabel("\(spotTypeDescription), \(spot.name), header icon")
+            }
             
             Text(spot.address)
                 .font(ThemeManager.SwiftUIFonts.body)
@@ -607,6 +615,42 @@ struct SpotDetailView: View {
         let userRatingAverage = min(5.0, totalRating / Double(userRatings.count))
         let combinedRating = (aggregateRating * 0.5) + (userRatingAverage * 0.5)
         return round(min(5.0, combinedRating) * 2.0) / 2.0
+    }
+    
+    /**
+     * Returns the appropriate SF Symbol icon based on spot type
+     */
+    private var typeIcon: String {
+        switch spot.type.lowercased() {
+        case "coffee":
+            return "cup.and.saucer.fill"
+        case "park":
+            return "tree.fill"
+        case "library":
+            return "book.fill"
+        case "coworking":
+            return "deskclock.fill"
+        default:
+            return "questionmark.circle.fill"
+        }
+    }
+    
+    /**
+     * Returns a human-readable description of the spot type
+     */
+    private var spotTypeDescription: String {
+        switch spot.type.lowercased() {
+        case "coffee":
+            return "Coffee shop"
+        case "park":
+            return "Park"
+        case "library":
+            return "Library"
+        case "coworking":
+            return "Co-working space"
+        default:
+            return "Work spot"
+        }
     }
     
     private func openDirections() {
