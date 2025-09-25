@@ -380,10 +380,6 @@ struct SpotDetailView: View {
                         .accessibilityLabel(showAllTips ? "Show less tips button" : "Show more tips button")
                     }
                 }
-                .onTapGesture {
-                    // Dismiss keyboard when tapping on user tips area
-                    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-                }
             } else {
                 Text("No user tips yet. Be the first to add one!")
                     .font(ThemeManager.SwiftUIFonts.body)
@@ -394,11 +390,11 @@ struct SpotDetailView: View {
                     .background(ThemeManager.SwiftUIColors.latte)
                     .cornerRadius(8)
                     .accessibilityLabel("No user tips available")
-                    .onTapGesture {
-                        // Dismiss keyboard when tapping on empty tips area
-                        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-                    }
             }
+        }
+        .onTapGesture {
+            // Dismiss keyboard when tapping anywhere outside the text field
+            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
         }
     }
     
