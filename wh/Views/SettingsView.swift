@@ -169,37 +169,37 @@ struct SettingsView: View {
                 .foregroundColor(ThemeManager.SwiftUIColors.mocha)
             
             VStack(spacing: ThemeManager.Spacing.sm) {
-                // Imperial Units Toggle
-                HStack {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Imperial Units (miles)")
-                            .font(ThemeManager.SwiftUIFonts.body)
-                            .foregroundColor(ThemeManager.SwiftUIColors.mocha)
-                        
-                        Text("Switch to Metric (km) for non-US users")
-                            .font(.system(size: 12, weight: .regular))
-                            .foregroundColor(.gray)
-                            .multilineTextAlignment(.leading)
-                    }
+                // Distance Units Picker
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Select your preferred distance unit")
+                        .font(ThemeManager.SwiftUIFonts.body)
+                        .foregroundColor(ThemeManager.SwiftUIColors.mocha)
                     
-                    Spacer()
-                    
-                    Toggle("", isOn: $usesImperialUnits)
-                        .tint(ThemeManager.SwiftUIColors.mocha)
-                        .accessibilityLabel("Imperial Units toggle, \(usesImperialUnits ? "on" : "off"), switch to Metric subtitle")
+                    Text("Choose between Imperial (miles) or Metric (kilometers)")
+                        .font(.system(size: 12, weight: .regular))
+                        .foregroundColor(.gray)
+                        .multilineTextAlignment(.leading)
                 }
-                .padding(ThemeManager.Spacing.md)
-                .background(
-                    RoundedRectangle(cornerRadius: ThemeManager.CornerRadius.medium)
-                        .fill(Color.white)
-                        .shadow(
-                            color: ThemeManager.SwiftUIColors.mocha.opacity(0.1),
-                            radius: 2,
-                            x: 0,
-                            y: 1
-                        )
-                )
+                
+                Picker("Distance Units", selection: $usesImperialUnits) {
+                    Text("Imperial (miles)").tag(true)
+                    Text("Metric (kilometers)").tag(false)
+                }
+                .pickerStyle(.segmented)
+                .tint(ThemeManager.SwiftUIColors.mocha)
+                .accessibilityLabel("Distance units picker, currently \(usesImperialUnits ? "Imperial miles" : "Metric kilometers")")
             }
+            .padding(ThemeManager.Spacing.md)
+            .background(
+                RoundedRectangle(cornerRadius: ThemeManager.CornerRadius.medium)
+                    .fill(Color.white)
+                    .shadow(
+                        color: ThemeManager.SwiftUIColors.mocha.opacity(0.1),
+                        radius: 2,
+                        x: 0,
+                        y: 1
+                    )
+            )
         }
     }
     
