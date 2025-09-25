@@ -147,7 +147,7 @@ struct SpotDetailView: View {
                 Text(distanceString)
                     .font(ThemeManager.SwiftUIFonts.caption)
                     .foregroundColor(ThemeManager.SwiftUIColors.coral)
-                    .accessibilityLabel("Distance: \(distanceString)")
+                    .accessibilityLabel("\(distanceString) from current location")
             }
         }
     }
@@ -565,14 +565,16 @@ struct SpotDetailView: View {
     // MARK: - Helper Methods
     
     private var distanceString: String {
-        guard let userLocation = locationService.currentLocation else {
+        let fallbackLocation = CLLocation(latitude: 37.7749, longitude: -122.4194)
+        let userLocation = locationService.currentLocation ?? fallbackLocation
+        
+        if locationService.currentLocation == nil {
             logger.debug("userLocation nil for spot \(spot.name), using fallback.")
-            let fallbackLocation = CLLocation(latitude: 37.7749, longitude: -122.4194)
-            let distance = spot.location.distance(from: fallbackLocation)
-            return String(format: "%.1f miles", distance / 1609.34)
         }
-        let distance = spot.location.distance(from: userLocation)
-        return String(format: "%.1f miles", distance / 1609.34)
+        
+        // Use SpotViewModel for proper unit conversion (Imperial/Metric)
+        let spotViewModel = SpotViewModel()
+        return spotViewModel.formattedDistance(spot: spot, from: userLocation)
     }
     
     private var overallRating: Double {
