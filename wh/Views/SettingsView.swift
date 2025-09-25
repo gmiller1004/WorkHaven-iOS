@@ -21,6 +21,7 @@ struct SettingsView: View {
     // MARK: - Properties
     
     @AppStorage("AutoDiscoverSpots") private var autoDiscoverSpots: Bool = true
+    @AppStorage("usesImperialUnits") private var usesImperialUnits: Bool = true
     @StateObject private var locationService = LocationService.shared
     @StateObject private var spotViewModel = SpotViewModel()
     
@@ -78,6 +79,9 @@ struct SettingsView: View {
             } message: {
                 Text(errorMessage)
             }
+            .onAppear {
+                initializeDistanceUnits()
+            }
         }
     }
     
@@ -88,6 +92,9 @@ struct SettingsView: View {
             VStack(spacing: ThemeManager.Spacing.lg) {
                 // Auto-Discover Section
                 autoDiscoverSection
+                
+                // Distance Units Section
+                distanceUnitsSection
                 
                 // Manual Actions Section
                 manualActionsSection
@@ -149,6 +156,49 @@ struct SettingsView: View {
                 
                 // Location Permission Status
                 locationPermissionStatus
+            }
+        }
+    }
+    
+    // MARK: - Distance Units Section
+    
+    private var distanceUnitsSection: some View {
+        VStack(alignment: .leading, spacing: ThemeManager.Spacing.md) {
+            Text("Distance Units")
+                .font(ThemeManager.SwiftUIFonts.headline)
+                .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+            
+            VStack(spacing: ThemeManager.Spacing.sm) {
+                // Imperial Units Toggle
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Imperial Units (Miles)")
+                            .font(ThemeManager.SwiftUIFonts.body)
+                            .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+                        
+                        Text("Switch to metric (km) for non-US users.")
+                            .font(ThemeManager.SwiftUIFonts.caption)
+                            .foregroundColor(ThemeManager.SwiftUIColors.mocha.opacity(0.7))
+                            .multilineTextAlignment(.leading)
+                    }
+                    
+                    Spacer()
+                    
+                    Toggle("", isOn: $usesImperialUnits)
+                        .tint(ThemeManager.SwiftUIColors.mocha)
+                        .accessibilityLabel("Imperial units toggle, \(usesImperialUnits ? "on" : "off")")
+                }
+                .padding(ThemeManager.Spacing.md)
+                .background(
+                    RoundedRectangle(cornerRadius: ThemeManager.CornerRadius.medium)
+                        .fill(Color.white)
+                        .shadow(
+                            color: ThemeManager.SwiftUIColors.mocha.opacity(0.1),
+                            radius: 2,
+                            x: 0,
+                            y: 1
+                        )
+                )
             }
         }
     }
@@ -285,6 +335,23 @@ struct SettingsView: View {
     }
     
     // MARK: - Methods
+    
+    /**
+     * Initializes distance units based on user's locale
+     */
+    private func initializeDistanceUnits() {
+        // Only set default if this is the first launch (UserDefaults hasn't been set)
+        if UserDefaults.standard.object(forKey: "usesImperialUnits") == nil {
+            let regionCode = Locale.current.region?.identifier ?? ""
+            let usesMetric = Locale.current.usesMetricSystem
+            
+            // Set Imperial for US, GB, LR; Metric for others
+            let shouldUseImperial = regionCode == "US" || regionCode == "GB" || regionCode == "LR" || !usesMetric
+            
+            usesImperialUnits = shouldUseImperial
+            logger.info("Initialized distance units: \(shouldUseImperial ? "Imperial" : "Metric") for region: \(regionCode)")
+        }
+    }
     
     /**
      * Handles auto-discover toggle changes
