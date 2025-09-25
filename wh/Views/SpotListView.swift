@@ -23,8 +23,69 @@ struct SpotListView: View {
     @ObservedObject var spotViewModel: SpotViewModel
     @ObservedObject private var locationService = LocationService.shared
     @State private var showingError = false
+    @State private var searchText = ""
+    @State private var sortOption: SortOption = .distance
     
     private let logger = Logger(subsystem: "com.nextsizzle.wh", category: "SpotListView")
+    
+    // MARK: - Sort Options
+    
+    enum SortOption: String, CaseIterable {
+        case distance = "Distance"
+        case rating = "Rating"
+        case name = "Name"
+    }
+    
+    // MARK: - Computed Properties
+    
+    /**
+     * Filtered spots based on search text
+     */
+    private var filteredSpots: [Spot] {
+        if searchText.isEmpty {
+            return spotViewModel.spots
+        }
+        
+        let searchLower = searchText.lowercased()
+        return spotViewModel.spots.filter { spot in
+            spot.name.lowercased().contains(searchLower) ||
+            spot.address.lowercased().contains(searchLower)
+        }
+    }
+    
+    /**
+     * Sorted spots based on selected sort option
+     */
+    private var sortedSpots: [Spot] {
+        let fallbackLocation = CLLocation(latitude: 37.7749, longitude: -122.4194)
+        let userLocation = locationService.currentLocation ?? fallbackLocation
+        
+        if userLocation == locationService.currentLocation && locationService.currentLocation == nil {
+            logger.info("DEBUG: userLocation nil for sorting, using fallback location")
+        }
+        
+        switch sortOption {
+        case .distance:
+            return filteredSpots.sorted { spot1, spot2 in
+                let location1 = CLLocation(latitude: spot1.latitude, longitude: spot1.longitude)
+                let location2 = CLLocation(latitude: spot2.latitude, longitude: spot2.longitude)
+                let distance1 = userLocation.distance(from: location1)
+                let distance2 = userLocation.distance(from: location2)
+                return distance1 < distance2
+            }
+        case .rating:
+            return filteredSpots.sorted { spot1, spot2 in
+                let tempViewModel = SpotViewModel()
+                let rating1 = tempViewModel.calculateOverallRating(for: spot1)
+                let rating2 = tempViewModel.calculateOverallRating(for: spot2)
+                return rating1 > rating2
+            }
+        case .name:
+            return filteredSpots.sorted { spot1, spot2 in
+                spot1.name < spot2.name
+            }
+        }
+    }
     
     // MARK: - Initialization
     
@@ -72,9 +133,18 @@ struct SpotListView: View {
                 } else if spotViewModel.spots.isEmpty {
                     // Empty state
                     emptyStateView
+                } else if sortedSpots.isEmpty {
+                    // No search results
+                    noSearchResultsView
                 } else {
-                    // Spots list
-                    spotsList
+                    // Search and sort controls with spots list
+                    VStack(spacing: 0) {
+                        // Search and sort controls
+                        searchAndSortControls
+                        
+                        // Spots list
+                        spotsList
+                    }
                 }
             }
             .navigationTitle("Work Spots")
@@ -110,7 +180,7 @@ struct SpotListView: View {
      */
     private var spotsList: some View {
         List {
-            ForEach(spotViewModel.spots, id: \.objectID) { spot in
+            ForEach(sortedSpots, id: \.objectID) { spot in
                         NavigationLink(destination: SpotDetailView(spot: spot, locationService: locationService)) {
                     SpotListRowView(spot: spot, userLocation: locationService.currentLocation)
                 }
@@ -149,6 +219,62 @@ struct SpotListView: View {
     }
     
     /**
+     * Search field and sort picker controls
+     */
+    private var searchAndSortControls: some View {
+        VStack(spacing: ThemeManager.Spacing.sm) {
+            // Search field
+            HStack {
+                Image(systemName: "magnifyingglass")
+                    .foregroundColor(ThemeManager.SwiftUIColors.mocha.opacity(0.6))
+                    .font(ThemeManager.SwiftUIFonts.body)
+                
+                TextField("Search spots...", text: $searchText)
+                    .font(ThemeManager.SwiftUIFonts.body)
+                    .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+                    .textFieldStyle(PlainTextFieldStyle())
+                    .accessibilityLabel("Search spots field")
+                
+                if !searchText.isEmpty {
+                    Button(action: {
+                        searchText = ""
+                    }) {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundColor(ThemeManager.SwiftUIColors.mocha.opacity(0.6))
+                            .font(ThemeManager.SwiftUIFonts.body)
+                    }
+                    .accessibilityLabel("Clear search")
+                }
+            }
+            .padding(ThemeManager.Spacing.sm)
+            .background(ThemeManager.SwiftUIColors.latte)
+            .cornerRadius(ThemeManager.CornerRadius.small)
+            .overlay(
+                RoundedRectangle(cornerRadius: ThemeManager.CornerRadius.small)
+                    .stroke(ThemeManager.SwiftUIColors.mocha.opacity(0.2), lineWidth: 1)
+            )
+            
+            // Sort picker
+            HStack {
+                Text("Sort by:")
+                    .font(ThemeManager.SwiftUIFonts.caption)
+                    .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+                
+                Picker("Sort by", selection: $sortOption) {
+                    ForEach(SortOption.allCases, id: \.self) { option in
+                        Text(option.rawValue).tag(option)
+                    }
+                }
+                .pickerStyle(SegmentedPickerStyle())
+                .accessibilityLabel("Sort by \(sortOption.rawValue) picker")
+            }
+        }
+        .padding(.horizontal, ThemeManager.Spacing.md)
+        .padding(.vertical, ThemeManager.Spacing.sm)
+        .background(ThemeManager.SwiftUIColors.latte)
+    }
+    
+    /**
      * Empty state when no spots are available
      */
     private var emptyStateView: some View {
@@ -169,6 +295,34 @@ struct SpotListView: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("No work spots found. Pull down to refresh or check your location settings")
+    }
+    
+    /**
+     * No search results state
+     */
+    private var noSearchResultsView: some View {
+        VStack(spacing: ThemeManager.Spacing.md) {
+            // Search and sort controls
+            searchAndSortControls
+            
+            VStack(spacing: ThemeManager.Spacing.md) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 48))
+                    .foregroundColor(ThemeManager.SwiftUIColors.mocha.opacity(0.6))
+                
+                Text("No spots match your search")
+                    .font(ThemeManager.SwiftUIFonts.headline)
+                    .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+                
+                Text("Try adjusting your search terms or sort options")
+                    .font(ThemeManager.SwiftUIFonts.body)
+                    .foregroundColor(ThemeManager.SwiftUIColors.mocha.opacity(0.7))
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, ThemeManager.Spacing.md)
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("No spots match your search. Try adjusting your search terms or sort options")
+        }
     }
     
     // MARK: - Methods
