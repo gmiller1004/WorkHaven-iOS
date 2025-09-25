@@ -47,14 +47,23 @@ struct ContentView: View {
     
     var body: some View {
         TabView {
-            // MARK: - Spots Tab
+            // MARK: - List Tab
             SpotListView(spotViewModel: spotViewModel)
                 .environment(\.managedObjectContext, viewContext)
                 .tabItem {
-                    Label("Spots", systemImage: "mappin.circle")
+                    Label("List", systemImage: "list.bullet")
                 }
-                .accessibilityLabel("Spots tab")
+                .accessibilityLabel("List tab")
                 .tag(0)
+            
+            // MARK: - Map Tab
+            MapView(spotViewModel: spotViewModel)
+                .environment(\.managedObjectContext, viewContext)
+                .tabItem {
+                    Label("Map", systemImage: "map")
+                }
+                .accessibilityLabel("Map tab")
+                .tag(1)
             
             // MARK: - Settings Tab
             SettingsView()
@@ -63,7 +72,7 @@ struct ContentView: View {
                     Label("Settings", systemImage: "gear")
                 }
                 .accessibilityLabel("Settings tab")
-                .tag(1)
+                .tag(2)
         }
         .accentColor(ThemeManager.SwiftUIColors.coral)
         .onAppear {
