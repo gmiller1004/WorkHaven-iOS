@@ -181,7 +181,7 @@ class SpotDiscoveryService: ObservableObject {
      * Intelligently handles new spots, stale spots, and duplicates
      */
     private func performSpotDiscovery(near location: CLLocation, radius: Double) async throws -> [Spot] {
-        var allMapItems: [MKMapItem] = []
+        var allMapItems: [(MKMapItem, String)] = [] // Store map item with its category
         var newSpotsCount = 0
         var staleSpotsCount = 0
         
@@ -198,14 +198,14 @@ class SpotDiscoveryService: ObservableObject {
                     let sevenDaysAgo = Calendar.current.date(byAdding: .day, value: -7, to: Date()) ?? Date()
                     if matchingSpot.lastSeeded < sevenDaysAgo {
                         logger.info("Found stale spot: \(mapItem.name ?? "Unknown") - will update")
-                        allMapItems.append(mapItem)
+                        allMapItems.append((mapItem, category))
                         staleSpotsCount += 1
                     } else {
                         logger.info("Found fresh spot: \(mapItem.name ?? "Unknown") - skipping")
                     }
                 } else {
                     // New spot
-                    allMapItems.append(mapItem)
+                    allMapItems.append((mapItem, category))
                     newSpotsCount += 1
                 }
             }
@@ -282,7 +282,7 @@ class SpotDiscoveryService: ObservableObject {
      * Batches Grok API calls (10 spots per request, max 2 concurrent) to reduce latency.
      * Only calls Grok API for new or stale spots.
      */
-    private func enrichAndCreateSpots(from mapItems: [MKMapItem]) async throws -> [Spot] {
+    private func enrichAndCreateSpots(from mapItems: [(MKMapItem, String)]) async throws -> [Spot] {
         guard let apiKey = getGrokAPIKey(), !apiKey.isEmpty else {
             logger.warning("GROK_API_KEY not found in build configuration")
             return try await createSpotsWithDefaults(from: mapItems)
@@ -321,8 +321,8 @@ class SpotDiscoveryService: ObservableObject {
                         // Create spots with defaults if batch API fails
                         do {
                             var fallbackSpots: [Spot] = []
-                            for mapItem in batch {
-                                let defaultSpot = try await self.createSpotWithDefaults(mapItem: mapItem)
+                            for (mapItem, category) in batch {
+                                let defaultSpot = try await self.createSpotWithDefaults(mapItem: mapItem, category: category)
                                 fallbackSpots.append(defaultSpot)
                             }
                             return .success(fallbackSpots)
@@ -364,8 +364,8 @@ class SpotDiscoveryService: ObservableObject {
                                 // Create spots with defaults if batch API fails
                                 do {
                                     var fallbackSpots: [Spot] = []
-                                    for mapItem in batch {
-                                        let defaultSpot = try await self.createSpotWithDefaults(mapItem: mapItem)
+                                    for (mapItem, category) in batch {
+                                        let defaultSpot = try await self.createSpotWithDefaults(mapItem: mapItem, category: category)
                                         fallbackSpots.append(defaultSpot)
                                     }
                                     return .success(fallbackSpots)
@@ -403,8 +403,8 @@ class SpotDiscoveryService: ObservableObject {
      * Enriches a batch of spots using the Grok API
      * Processes up to 10 spots in a single API call to reduce latency
      */
-    private func enrichBatchSpots(_ mapItems: [MKMapItem], apiKey: String) async throws -> [Spot] {
-        let spotDescriptions = mapItems.map { mapItem in
+    private func enrichBatchSpots(_ mapItems: [(MKMapItem, String)], apiKey: String) async throws -> [Spot] {
+        let spotDescriptions = mapItems.map { (mapItem, _) in
             let name = mapItem.name ?? "Unknown Location"
             let address = mapItem.placemark.title ?? "Unknown Address"
             return "\(name) at \(address)"
@@ -442,13 +442,13 @@ class SpotDiscoveryService: ObservableObject {
                 logger.info("Successfully parsed \(batchData.count) enriched spots from Grok API")
                 
                 // Match batch data to map items by name
-                for mapItem in mapItems {
+                for (mapItem, category) in mapItems {
                     let name = mapItem.name ?? "Unknown Location"
                     let address = mapItem.placemark.title ?? "Unknown Address"
                     
                     // Try exact match first
                     if let spotData = batchData.first(where: { $0.name.lowercased() == name.lowercased() }) {
-                        let spot = createSpotFromMapItem(mapItem: mapItem, batchData: spotData)
+                        let spot = createSpotFromMapItem(mapItem: mapItem, batchData: spotData, category: category)
                         spots.append(spot)
                         logger.debug("Enriched spot (exact match): \(name) - WiFi: \(spotData.wifi), Noise: \(spotData.noise)")
                     } else {
@@ -459,13 +459,13 @@ class SpotDiscoveryService: ObservableObject {
                             // Or if our venue name contains the first part of Grok name
                             name.lowercased().contains(grokName.name.components(separatedBy: " at ").first?.lowercased() ?? "")
                         }) {
-                            let spot = createSpotFromMapItem(mapItem: mapItem, batchData: spotData)
+                            let spot = createSpotFromMapItem(mapItem: mapItem, batchData: spotData, category: category)
                             spots.append(spot)
                             logger.debug("Enriched spot (partial match): \(name) - WiFi: \(spotData.wifi), Noise: \(spotData.noise)")
                         } else {
                             logger.warning("No Grok data found for \(name), using defaults")
                             // Fallback to default if no match found
-                            let defaultSpot = try await createSpotWithDefaults(mapItem: mapItem)
+                            let defaultSpot = try await createSpotWithDefaults(mapItem: mapItem, category: category)
                             spots.append(defaultSpot)
                         }
                     }
@@ -474,16 +474,16 @@ class SpotDiscoveryService: ObservableObject {
                 logger.error("Failed to parse batch enriched data: \(error.localizedDescription)")
                 logger.error("Raw response: \(content)")
                 // Fallback to individual processing
-                for mapItem in mapItems {
-                    let defaultSpot = try await createSpotWithDefaults(mapItem: mapItem)
+                for (mapItem, category) in mapItems {
+                    let defaultSpot = try await createSpotWithDefaults(mapItem: mapItem, category: category)
                     spots.append(defaultSpot)
                 }
             }
         } else {
             logger.warning("No content in Grok API response, using defaults")
             // Fallback to defaults if no content
-            for mapItem in mapItems {
-                let defaultSpot = try await createSpotWithDefaults(mapItem: mapItem)
+            for (mapItem, category) in mapItems {
+                let defaultSpot = try await createSpotWithDefaults(mapItem: mapItem, category: category)
                 spots.append(defaultSpot)
             }
         }
@@ -612,7 +612,7 @@ class SpotDiscoveryService: ObservableObject {
     /**
      * Creates a Spot entity from map item and batch data
      */
-    private func createSpotFromMapItem(mapItem: MKMapItem, batchData: BatchSpotData) -> Spot {
+    private func createSpotFromMapItem(mapItem: MKMapItem, batchData: BatchSpotData, category: String) -> Spot {
         let context = persistenceController.container.viewContext
         let spot = Spot(context: context)
         
@@ -625,6 +625,11 @@ class SpotDiscoveryService: ObservableObject {
         // Let CloudKit generate the record ID automatically
         spot.cloudKitRecordID = ""
         spot.markAsModified()
+        
+        // Set type based on search category
+        let spotType = getSpotType(for: category)
+        spot.type = spotType
+        logger.info("Set type: \(spotType) for \(spot.name)")
         
         // Use batch data
         spot.wifiRating = Int16(batchData.wifi)
@@ -638,11 +643,11 @@ class SpotDiscoveryService: ObservableObject {
     /**
      * Creates spots with default values when API fails
      */
-    private func createSpotsWithDefaults(from mapItems: [MKMapItem]) async throws -> [Spot] {
+    private func createSpotsWithDefaults(from mapItems: [(MKMapItem, String)]) async throws -> [Spot] {
         var spots: [Spot] = []
         
-        for mapItem in mapItems {
-            let spot = try await createSpotWithDefaults(mapItem: mapItem)
+        for (mapItem, category) in mapItems {
+            let spot = try await createSpotWithDefaults(mapItem: mapItem, category: category)
             spots.append(spot)
         }
         
@@ -655,7 +660,7 @@ class SpotDiscoveryService: ObservableObject {
     /**
      * Creates a single spot with default values
      */
-    private func createSpotWithDefaults(mapItem: MKMapItem) async throws -> Spot {
+    private func createSpotWithDefaults(mapItem: MKMapItem, category: String) async throws -> Spot {
         let context = persistenceController.container.viewContext
         let spot = Spot(context: context)
         
@@ -668,6 +673,11 @@ class SpotDiscoveryService: ObservableObject {
         // Let CloudKit generate the record ID automatically
         spot.cloudKitRecordID = ""
         spot.markAsModified()
+        
+        // Set type based on search category
+        let spotType = getSpotType(for: category)
+        spot.type = spotType
+        logger.info("Set type: \(spotType) for \(spot.name)")
         
         setDefaultValues(for: spot)
         
@@ -685,6 +695,25 @@ class SpotDiscoveryService: ObservableObject {
     }
     
     // MARK: - Utility Functions
+    
+    /**
+     * Determines the spot type based on the search category
+     * Maps MKLocalSearch categories to our internal type system
+     */
+    private func getSpotType(for category: String) -> String {
+        switch category.lowercased() {
+        case "coffee shop":
+            return "coffee"
+        case "library":
+            return "library"
+        case "park":
+            return "park"
+        case "co-working space":
+            return "coworking"
+        default:
+            return "unknown"
+        }
+    }
     
     /**
      * Gets the Grok API key from environment variables

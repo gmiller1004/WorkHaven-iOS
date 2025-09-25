@@ -58,6 +58,35 @@ public class Spot: NSManagedObject {
         return (Double(withOutlets) / Double(ratings.count)) * 100.0
     }
     
+    // MARK: - Lifecycle Methods
+    
+    public override func awakeFromInsert() {
+        super.awakeFromInsert()
+        
+        // Set default values for new spots
+        if type.isEmpty {
+            type = "unknown"
+        }
+        if cloudKitRecordID.isEmpty {
+            cloudKitRecordID = ""
+        }
+        lastModified = Date()
+        lastSeeded = Date()
+    }
+    
+    public override func awakeFromFetch() {
+        super.awakeFromFetch()
+        
+        // Ensure type is not empty (fallback for existing data)
+        if type.isEmpty {
+            type = "unknown"
+        }
+        // Ensure cloudKitRecordID is not nil
+        if cloudKitRecordID.isEmpty {
+            cloudKitRecordID = ""
+        }
+    }
+    
     // MARK: - Helper Methods
     
     /// Updates the lastModified timestamp to the current date

@@ -13,6 +13,7 @@
         <attribute name="lastModified" optional="NO" attributeType="Date" defaultValueString="0.0"/>
         <attribute name="lastSeeded" optional="NO" attributeType="Date" defaultValueString="0.0"/>
         <attribute name="cloudKitRecordID" optional="NO" attributeType="String" defaultValueString=""/>
+        <attribute name="type" optional="NO" attributeType="String" defaultValueString="unknown"/>
         <relationship name="userRatings" optional="YES" toMany="YES" deletionRule="Cascade" destinationEntity="UserRating" inverseName="spot" inverseEntity="UserRating"/>
         <relationship name="photos" optional="YES" toMany="YES" deletionRule="Cascade" destinationEntity="Photo" inverseName="spot" inverseEntity="Photo"/>
         <relationship name="userTips" optional="YES" toMany="YES" deletionRule="Cascade" destinationEntity="UserTip" inverseName="spot" inverseEntity="UserTip"/>

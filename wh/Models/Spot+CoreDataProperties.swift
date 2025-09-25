@@ -56,6 +56,9 @@ extension Spot {
     /// CloudKit record identifier for synchronization
     @NSManaged public var cloudKitRecordID: String
     
+    /// Type of work spot (e.g., "coffee shop", "library", "coworking space")
+    @NSManaged public var type: String
+    
     /// One-to-many relationship to user ratings for this spot
     @NSManaged public var userRatings: NSSet?
     
