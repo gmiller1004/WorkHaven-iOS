@@ -22,6 +22,7 @@ struct SpotDetailView: View {
     @Environment(\.dismiss) var dismiss
     @ObservedObject var spot: Spot
     @ObservedObject var locationService: LocationService
+    @AppStorage("usesImperialUnits") private var usesImperialUnits: Bool = true
     
     @State private var showingMap = false
     @State private var showingImagePicker = false
@@ -572,9 +573,25 @@ struct SpotDetailView: View {
             logger.debug("userLocation nil for spot \(spot.name), using fallback.")
         }
         
-        // Use SpotViewModel for proper unit conversion (Imperial/Metric)
-        let spotViewModel = SpotViewModel()
-        return spotViewModel.formattedDistance(spot: spot, from: userLocation)
+        let spotLocation = CLLocation(latitude: spot.latitude, longitude: spot.longitude)
+        let distanceInMeters = userLocation.distance(from: spotLocation)
+        
+        return formatDistance(distanceInMeters)
+    }
+    
+    /**
+     * Formats distance for display with unit conversion based on user preference
+     */
+    private func formatDistance(_ distance: Double) -> String {
+        if usesImperialUnits {
+            // Convert to miles
+            let miles = distance / 1609.34
+            return String(format: "%.1f mi", miles)
+        } else {
+            // Convert to kilometers
+            let kilometers = distance / 1000
+            return String(format: "%.1f km", kilometers)
+        }
     }
     
     private var overallRating: Double {

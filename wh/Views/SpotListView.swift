@@ -22,6 +22,7 @@ struct SpotListView: View {
     
     @ObservedObject var spotViewModel: SpotViewModel
     @ObservedObject private var locationService = LocationService.shared
+    @AppStorage("usesImperialUnits") private var usesImperialUnits: Bool = true
     @State private var showingError = false
     @State private var searchText = ""
     @State private var sortOption: SortOption = .distance
@@ -182,7 +183,7 @@ struct SpotListView: View {
         List {
             ForEach(sortedSpots, id: \.objectID) { spot in
                         NavigationLink(destination: SpotDetailView(spot: spot, locationService: locationService)) {
-                    SpotListRowView(spot: spot, userLocation: locationService.currentLocation)
+                    SpotListRowView(spot: spot, userLocation: locationService.currentLocation, usesImperialUnits: usesImperialUnits)
                 }
                 .listRowBackground(ThemeManager.SwiftUIColors.latte)
                 .listRowSeparator(.hidden)
@@ -362,10 +363,12 @@ struct SpotListView: View {
 public struct SpotListRowView: View {
     public let spot: Spot
     public let userLocation: CLLocation?
+    public let usesImperialUnits: Bool
     
-    public init(spot: Spot, userLocation: CLLocation?) {
+    public init(spot: Spot, userLocation: CLLocation?, usesImperialUnits: Bool) {
         self.spot = spot
         self.userLocation = userLocation
+        self.usesImperialUnits = usesImperialUnits
     }
     
     private var distance: Double {
@@ -431,7 +434,7 @@ public struct SpotListRowView: View {
                 Spacer()
                 
                 VStack(alignment: .trailing, spacing: 4) {
-                    Text(SpotViewModel().formattedDistance(spot: spot, from: userLocation))
+                    Text(formattedDistance(spot: spot, from: userLocation))
                         .font(ThemeManager.SwiftUIFonts.caption)
                         .foregroundColor(ThemeManager.SwiftUIColors.mocha.opacity(0.7))
                     
@@ -511,7 +514,7 @@ public struct SpotListRowView: View {
      * VoiceOver accessibility label
      */
     private var accessibilityLabel: String {
-        let distanceText = SpotViewModel().formattedDistance(spot: spot, from: userLocation)
+        let distanceText = formattedDistance(spot: spot, from: userLocation)
         let ratingText = String(format: "%.1f stars", overallRating)
         let wifiText = "\(Int(spot.wifiRating)) out of 5 WiFi"
         let noiseText = "\(spot.noiseRating) noise level"
@@ -519,6 +522,34 @@ public struct SpotListRowView: View {
         let typeText = spotTypeDescription
         
         return "\(typeText), \(spot.name), \(distanceText), \(ratingText), \(wifiText), \(noiseText), \(outletsText)"
+    }
+    
+    /**
+     * Formats distance for display with unit conversion based on user preference
+     */
+    private func formattedDistance(spot: Spot, from userLocation: CLLocation?) -> String {
+        let fallbackLocation = CLLocation(latitude: 37.7749, longitude: -122.4194)
+        let locationToUse = userLocation ?? fallbackLocation
+        
+        let spotLocation = CLLocation(latitude: spot.latitude, longitude: spot.longitude)
+        let distanceInMeters = locationToUse.distance(from: spotLocation)
+        
+        return formatDistance(distanceInMeters)
+    }
+    
+    /**
+     * Formats distance for display with unit conversion based on user preference
+     */
+    private func formatDistance(_ distance: Double) -> String {
+        if usesImperialUnits {
+            // Convert to miles
+            let miles = distance / 1609.34
+            return String(format: "%.1f mi", miles)
+        } else {
+            // Convert to kilometers
+            let kilometers = distance / 1000
+            return String(format: "%.1f km", kilometers)
+        }
     }
     
     /**
