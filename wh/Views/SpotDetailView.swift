@@ -29,6 +29,12 @@ struct SpotDetailView: View {
     @State private var showingError = false
     @State private var errorMessage = ""
     
+    // Photo gallery state
+    @State private var showPhotoViewer = false
+    @State private var selectedPhotoIndex = 0
+    @State private var showFlagConfirmation = false
+    @State private var flaggedPhoto: Photo?
+    
     // User rating form state
     @State private var wifiRating: Double = 3.0
     @State private var noiseLevel = "Medium"
@@ -78,10 +84,21 @@ struct SpotDetailView: View {
             .sheet(isPresented: $showingRatingForm) {
                 ratingFormView
             }
+            .fullScreenCover(isPresented: $showPhotoViewer) {
+                photoViewer
+            }
             .alert("Error", isPresented: $showingError) {
                 Button("OK") { }
             } message: {
                 Text(errorMessage)
+            }
+            .alert("Confirm Flag", isPresented: $showFlagConfirmation) {
+                Button("Cancel", role: .cancel) { }
+                Button("Flag as Inappropriate", role: .destructive) {
+                    flagPhoto()
+                }
+            } message: {
+                Text("Are you sure you want to flag this photo as inappropriate? This action cannot be undone.")
             }
         }
     }
@@ -306,10 +323,20 @@ struct SpotDetailView: View {
             }
             
             if let photos = spot.photos as? Set<Photo>, !photos.isEmpty {
+                let sortedPhotos = Array(photos).sorted { photo1, photo2 in
+                    let score1 = photo1.likes - photo1.dislikes
+                    let score2 = photo2.likes - photo2.dislikes
+                    return score1 > score2
+                }
+                
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: ThemeManager.Spacing.sm) {
-                        ForEach(Array(photos).sorted(by: { $0.timestamp > $1.timestamp }), id: \.objectID) { photo in
+                        ForEach(Array(sortedPhotos.enumerated()), id: \.element.objectID) { index, photo in
                             photoThumbnailView(photo: photo)
+                                .onTapGesture {
+                                    selectedPhotoIndex = index
+                                    showPhotoViewer = true
+                                }
                         }
                     }
                     .padding(.horizontal)
@@ -422,6 +449,25 @@ struct SpotDetailView: View {
                 }
             }
         }
+    }
+    
+    private var photoViewer: some View {
+        PhotoViewer(
+            photos: getSortedPhotos(),
+            selectedIndex: $selectedPhotoIndex,
+            onLike: { photo in
+                photo.addLike()
+                saveContext()
+            },
+            onDislike: { photo in
+                photo.addDislike()
+                saveContext()
+            },
+            onFlag: { photo in
+                flaggedPhoto = photo
+                showFlagConfirmation = true
+            }
+        )
     }
     
     // MARK: - Helper Methods
@@ -625,6 +671,228 @@ struct SpotDetailView: View {
     private func showError(_ message: String) {
         errorMessage = message
         showingError = true
+    }
+    
+    private func getSortedPhotos() -> [Photo] {
+        guard let photos = spot.photos as? Set<Photo> else { return [] }
+        return Array(photos).sorted { photo1, photo2 in
+            let score1 = photo1.likes - photo1.dislikes
+            let score2 = photo2.likes - photo2.dislikes
+            return score1 > score2
+        }
+    }
+    
+    private func saveContext() {
+        do {
+            try viewContext.save()
+            logger.info("Successfully saved context")
+        } catch {
+            logger.error("Failed to save context: \(error.localizedDescription)")
+            showError("Failed to save changes: \(error.localizedDescription)")
+        }
+    }
+    
+    private func flagPhoto() {
+        guard let photo = flaggedPhoto else { return }
+        
+        Task {
+            do {
+                // Delete from CloudKit if it has a photoAsset
+                if let photoAsset = photo.photoAsset, !photoAsset.isEmpty {
+                    let container = CKContainer.default()
+                    let database = container.privateCloudDatabase
+                    let recordID = CKRecord.ID(recordName: photoAsset)
+                    
+                    try await database.deleteRecord(withID: recordID)
+                    logger.info("Successfully deleted photo from CloudKit")
+                }
+                
+                // Delete from Core Data
+                await MainActor.run {
+                    viewContext.delete(photo)
+                    saveContext()
+                    logger.info("Successfully flagged and deleted photo")
+                }
+            } catch {
+                logger.error("Failed to flag photo: \(error.localizedDescription)")
+                await MainActor.run {
+                    showError("Failed to flag photo: \(error.localizedDescription)")
+                }
+            }
+        }
+        
+        // Reset states
+        flaggedPhoto = nil
+        showFlagConfirmation = false
+    }
+}
+
+// MARK: - Photo Viewer
+
+struct PhotoViewer: View {
+    let photos: [Photo]
+    @Binding var selectedIndex: Int
+    let onLike: (Photo) -> Void
+    let onDislike: (Photo) -> Void
+    let onFlag: (Photo) -> Void
+    
+    @Environment(\.dismiss) private var dismiss
+    @State private var loadedImages: [String: UIImage] = [:]
+    @State private var loadingImages: Set<String> = []
+    
+    private let logger = Logger(subsystem: "com.nextsizzle.wh", category: "PhotoViewer")
+    
+    var body: some View {
+        NavigationView {
+            ZStack {
+                // Background
+                Color.black
+                    .ignoresSafeArea()
+                
+                if !photos.isEmpty {
+                    TabView(selection: $selectedIndex) {
+                        ForEach(Array(photos.enumerated()), id: \.element.objectID) { index, photo in
+                            photoView(photo: photo, index: index)
+                                .tag(index)
+                        }
+                    }
+                    .tabViewStyle(PageTabViewStyle(indexDisplayMode: .never))
+                    .ignoresSafeArea()
+                } else {
+                    Text("No photos available")
+                        .foregroundColor(.white)
+                        .font(ThemeManager.SwiftUIFonts.title)
+                }
+            }
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Done") {
+                        dismiss()
+                    }
+                    .foregroundColor(.white)
+                }
+                
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    if !photos.isEmpty {
+                        Button("Flag") {
+                            onFlag(photos[selectedIndex])
+                        }
+                        .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+                    }
+                }
+            }
+            .overlay(
+                // Bottom controls
+                VStack {
+                    Spacer()
+                    
+                    if !photos.isEmpty {
+                        HStack(spacing: ThemeManager.Spacing.lg) {
+                            // Thumbs down button
+                            Button(action: {
+                                onDislike(photos[selectedIndex])
+                            }) {
+                                Image(systemName: "hand.thumbsdown.fill")
+                                    .font(.title2)
+                                    .foregroundColor(ThemeManager.SwiftUIColors.coral)
+                            }
+                            .accessibilityLabel("Thumbs down button")
+                            
+                            // Photo counter
+                            Text("\(selectedIndex + 1) of \(photos.count)")
+                                .font(ThemeManager.SwiftUIFonts.body)
+                                .foregroundColor(.white)
+                                .accessibilityLabel("Photo \(selectedIndex + 1) of \(photos.count)")
+                            
+                            // Thumbs up button
+                            Button(action: {
+                                onLike(photos[selectedIndex])
+                            }) {
+                                Image(systemName: "hand.thumbsup.fill")
+                                    .font(.title2)
+                                    .foregroundColor(ThemeManager.SwiftUIColors.coral)
+                            }
+                            .accessibilityLabel("Thumbs up button")
+                        }
+                        .padding()
+                        .background(Color.black.opacity(0.7))
+                        .cornerRadius(ThemeManager.CornerRadius.medium)
+                        .padding(.bottom, 50)
+                    }
+                }
+            )
+        }
+    }
+    
+    private func photoView(photo: Photo, index: Int) -> some View {
+        Group {
+            if let photoAsset = photo.photoAsset, !photoAsset.isEmpty {
+                // CloudKit asset
+                if let image = loadedImages[photoAsset] {
+                    Image(uiImage: image)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .ignoresSafeArea()
+                        .accessibilityLabel("Photo \(index + 1) of \(photos.count)")
+                } else if loadingImages.contains(photoAsset) {
+                    // Loading state
+                    ProgressView()
+                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                        .scaleEffect(2.0)
+                        .accessibilityLabel("Loading photo")
+                } else {
+                    // Load CloudKit asset
+                    Rectangle()
+                        .fill(Color.gray)
+                        .overlay(
+                            ProgressView()
+                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                .scaleEffect(2.0)
+                        )
+                        .onAppear {
+                            loadCloudKitImage(photo: photo, assetID: photoAsset)
+                        }
+                        .accessibilityLabel("Photo \(index + 1) of \(photos.count)")
+                }
+            } else if let image = photo.image {
+                // Local image data (fallback)
+                Image(uiImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .ignoresSafeArea()
+                    .accessibilityLabel("Photo \(index + 1) of \(photos.count)")
+            } else {
+                // No image available
+                Rectangle()
+                    .fill(Color.gray)
+                    .overlay(
+                        Image(systemName: "photo")
+                            .foregroundColor(.white)
+                            .font(.largeTitle)
+                    )
+                    .accessibilityLabel("Photo \(index + 1) of \(photos.count)")
+            }
+        }
+    }
+    
+    private func loadCloudKitImage(photo: Photo, assetID: String) {
+        guard !loadingImages.contains(assetID) else { return }
+        
+        loadingImages.insert(assetID)
+        
+        Task {
+            if let image = await photo.loadImageFromCloudKit(assetID: assetID) {
+                await MainActor.run {
+                    loadedImages[assetID] = image
+                    loadingImages.remove(assetID)
+                }
+            } else {
+                await MainActor.run {
+                    loadingImages.remove(assetID)
+                }
+            }
+        }
     }
 }
 
