@@ -20,8 +20,11 @@ extension Photo {
         return NSFetchRequest<Photo>(entityName: "Photo")
     }
 
-    /// Binary data containing the image (JPEG format)
+    /// Binary data containing the image (JPEG format) - deprecated in favor of CloudKit assets
     @NSManaged public var imageData: Data?
+    
+    /// CloudKit asset identifier for photo synchronization across devices
+    @NSManaged public var photoAsset: String?
     
     /// Timestamp when the photo was taken or added
     @NSManaged public var timestamp: Date

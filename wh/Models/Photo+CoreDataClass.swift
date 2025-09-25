@@ -9,6 +9,7 @@
 import Foundation
 import CoreData
 import UIKit
+import CloudKit
 
 /**
  * Photo+CoreDataClass provides the Core Data class implementation
@@ -20,17 +21,27 @@ public class Photo: NSManagedObject {
     
     // MARK: - Computed Properties
     
-    /// Returns the UIImage representation of the stored image data
+    /// Returns the UIImage representation of the stored image data or CloudKit asset
     public var image: UIImage? {
         get {
+            // First try to get from CloudKit asset
+            if let photoAsset = photoAsset, !photoAsset.isEmpty {
+                return loadImageFromCloudKitAsset(assetID: photoAsset)
+            }
+            
+            // Fallback to local imageData
             guard let imageData = imageData else { return nil }
             return UIImage(data: imageData)
         }
         set {
             if let newImage = newValue {
-                imageData = newImage.jpegData(compressionQuality: 0.8)
+                // Store as CloudKit asset instead of local data
+                Task {
+                    await uploadImageToCloudKit(newImage)
+                }
             } else {
                 imageData = nil
+                photoAsset = nil
             }
         }
     }
@@ -45,6 +56,11 @@ public class Photo: NSManagedObject {
     
     /// Returns the file size of the image data in a human-readable format
     public var fileSizeString: String {
+        // For CloudKit assets, we can't easily determine size without downloading
+        if photoAsset != nil && !photoAsset!.isEmpty {
+            return "CloudKit Asset"
+        }
+        
         guard let imageData = imageData else { return "0 B" }
         let bytes = imageData.count
         
@@ -65,6 +81,7 @@ public class Photo: NSManagedObject {
         // Set default values
         timestamp = Date()
         cloudKitRecordID = ""
+        photoAsset = nil
     }
     
     public override func awakeFromFetch() {
@@ -73,6 +90,11 @@ public class Photo: NSManagedObject {
         // Ensure cloudKitRecordID is not nil
         if cloudKitRecordID.isEmpty {
             cloudKitRecordID = ""
+        }
+        
+        // Ensure photoAsset is not nil
+        if photoAsset == nil {
+            photoAsset = nil
         }
     }
     
@@ -131,14 +153,102 @@ public class Photo: NSManagedObject {
     }
     
     private func validatePhoto() throws {
-        // Ensure image data is not nil or empty
-        guard let imageData = imageData, !imageData.isEmpty else {
-            throw NSError(domain: "PhotoValidation", code: 1001, userInfo: [NSLocalizedDescriptionKey: "Photo must have image data"])
+        // Ensure we have either image data or a CloudKit asset
+        let hasImageData = imageData != nil && !imageData!.isEmpty
+        let hasCloudKitAsset = photoAsset != nil && !photoAsset!.isEmpty
+        
+        guard hasImageData || hasCloudKitAsset else {
+            throw NSError(domain: "PhotoValidation", code: 1001, userInfo: [NSLocalizedDescriptionKey: "Photo must have image data or CloudKit asset"])
         }
         
         // Ensure timestamp is valid
         guard timestamp.timeIntervalSince1970 > 0 else {
             throw NSError(domain: "PhotoValidation", code: 1002, userInfo: [NSLocalizedDescriptionKey: "Photo must have a valid timestamp"])
+        }
+    }
+    
+    // MARK: - CloudKit Asset Methods
+    
+    /// Uploads an image to CloudKit as a CKAsset
+    /// - Parameter image: The UIImage to upload
+    private func uploadImageToCloudKit(_ image: UIImage) async {
+        do {
+            // Compress image to JPEG with quality 0.7
+            guard let compressedData = image.jpegData(compressionQuality: 0.7) else {
+                print("Failed to compress image for CloudKit upload")
+                return
+            }
+            
+            // Create temporary file for CKAsset
+            let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".jpg")
+            try compressedData.write(to: tempURL)
+            
+            // Create CKAsset
+            let asset = CKAsset(fileURL: tempURL)
+            
+            // Create CloudKit record
+            let recordID = CKRecord.ID(recordName: UUID().uuidString)
+            let record = CKRecord(recordType: "Photo", recordID: recordID)
+            record["imageAsset"] = asset
+            record["timestamp"] = timestamp
+            record["spotID"] = spot?.cloudKitRecordID ?? ""
+            
+            // Upload to CloudKit
+            let container = CKContainer.default()
+            let database = container.privateCloudDatabase
+            
+            let _ = try await database.save(record)
+            
+            // Update local properties
+            await MainActor.run {
+                self.photoAsset = record.recordID.recordName
+                self.cloudKitRecordID = record.recordID.recordName
+                // Remove local imageData since we're using CloudKit
+                self.imageData = nil
+                
+                // Save context
+                try? self.managedObjectContext?.save()
+            }
+            
+            // Clean up temporary file
+            try? FileManager.default.removeItem(at: tempURL)
+            
+        } catch {
+            print("Failed to upload image to CloudKit: \(error.localizedDescription)")
+        }
+    }
+    
+    /// Loads an image from CloudKit asset
+    /// - Parameter assetID: The CloudKit record ID of the asset
+    /// - Returns: UIImage if successful, nil otherwise
+    private func loadImageFromCloudKitAsset(assetID: String) -> UIImage? {
+        // This is a synchronous method, so we'll return nil and handle async loading in the UI
+        // The actual loading should be done asynchronously in the view layer
+        return nil
+    }
+    
+    /// Asynchronously loads an image from CloudKit asset
+    /// - Parameter assetID: The CloudKit record ID of the asset
+    /// - Returns: UIImage if successful, nil otherwise
+    public func loadImageFromCloudKit(assetID: String) async -> UIImage? {
+        do {
+            let container = CKContainer.default()
+            let database = container.privateCloudDatabase
+            
+            let recordID = CKRecord.ID(recordName: assetID)
+            let record = try await database.record(for: recordID)
+            
+            guard let asset = record["imageAsset"] as? CKAsset,
+                  let fileURL = asset.fileURL else {
+                return nil
+            }
+            
+            let imageData = try Data(contentsOf: fileURL)
+            return UIImage(data: imageData)
+            
+        } catch {
+            print("Failed to load image from CloudKit: \(error.localizedDescription)")
+            return nil
         }
     }
 }

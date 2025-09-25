@@ -10,6 +10,7 @@ import SwiftUI
 import CoreData
 import CoreLocation
 import OSLog
+import UserNotifications
 
 /**
  * ContentView provides the main TabView navigation for WorkHaven.
@@ -37,6 +38,11 @@ struct ContentView: View {
     // Alert state for location errors
     @State private var showingLocationError = false
     
+    // Onboarding state for permissions
+    @State private var hasRequestedPermissions = UserDefaults.standard.bool(forKey: "HasRequestedPermissions")
+    @State private var showingOnboarding = false
+    @State private var isRequestingPermissions = false
+    
     // MARK: - Body
     
     var body: some View {
@@ -61,7 +67,11 @@ struct ContentView: View {
         }
         .accentColor(ThemeManager.SwiftUIColors.coral)
         .onAppear {
-            loadSpotsIfNeeded()
+            if !hasRequestedPermissions {
+                showingOnboarding = true
+            } else {
+                loadSpotsIfNeeded()
+            }
         }
         .onChange(of: locationService.currentLocation) { newLocation in
             if let location = newLocation {
@@ -90,6 +100,17 @@ struct ContentView: View {
                 .foregroundColor(ThemeManager.SwiftUIColors.mocha)
         }
         .background(ThemeManager.SwiftUIColors.latte)
+        .sheet(isPresented: $showingOnboarding) {
+            OnboardingView(
+                isRequestingPermissions: $isRequestingPermissions,
+                onPermissionsGranted: {
+                    hasRequestedPermissions = true
+                    UserDefaults.standard.set(true, forKey: "HasRequestedPermissions")
+                    showingOnboarding = false
+                    loadSpotsIfNeeded()
+                }
+            )
+        }
     }
     
     // MARK: - Methods
@@ -109,6 +130,186 @@ struct ContentView: View {
         Task {
             await spotViewModel.loadSpots(near: locationToUse)
         }
+    }
+}
+
+// MARK: - OnboardingView
+
+/**
+ * OnboardingView provides a one-time permission request flow for new users.
+ * Requests location and notification permissions with clear explanations.
+ * Uses ThemeManager for consistent styling and includes accessibility support.
+ */
+struct OnboardingView: View {
+    
+    // MARK: - Properties
+    
+    @Binding var isRequestingPermissions: Bool
+    let onPermissionsGranted: () -> Void
+    
+    @Environment(\.dismiss) private var dismiss
+    
+    // Logger for debugging
+    private let logger = Logger(subsystem: "com.nextsizzle.wh", category: "OnboardingView")
+    
+    // MARK: - Body
+    
+    var body: some View {
+        NavigationView {
+            VStack(spacing: ThemeManager.Spacing.lg) {
+                // MARK: - Header
+                VStack(spacing: ThemeManager.Spacing.md) {
+                    Image(systemName: "mappin.circle.fill")
+                        .font(.system(size: 60))
+                        .foregroundColor(ThemeManager.SwiftUIColors.coral)
+                        .accessibilityHidden(true)
+                    
+                    Text("Welcome to WorkHaven")
+                        .font(ThemeManager.SwiftUIFonts.title)
+                        .fontWeight(.bold)
+                        .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+                        .multilineTextAlignment(.center)
+                    
+                    Text("Discover the best work spots near you")
+                        .font(ThemeManager.SwiftUIFonts.body)
+                        .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+                        .multilineTextAlignment(.center)
+                }
+                .padding(.top, ThemeManager.Spacing.xl)
+                
+                // MARK: - Permission Explanations
+                VStack(spacing: ThemeManager.Spacing.lg) {
+                    PermissionRowView(
+                        icon: "location.fill",
+                        title: "Location Access",
+                        description: "Find work spots near your current location and get accurate distances"
+                    )
+                    
+                    PermissionRowView(
+                        icon: "bell.fill",
+                        title: "Notifications",
+                        description: "Get notified about new work spots and updates"
+                    )
+                }
+                .padding(.horizontal, ThemeManager.Spacing.lg)
+                
+                Spacer()
+                
+                // MARK: - Action Buttons
+                VStack(spacing: ThemeManager.Spacing.md) {
+                    Button(action: requestPermissions) {
+                        HStack {
+                            if isRequestingPermissions {
+                                ProgressView()
+                                    .progressViewStyle(CircularProgressViewStyle(tint: ThemeManager.SwiftUIColors.latte))
+                                    .scaleEffect(0.8)
+                            }
+                            Text(isRequestingPermissions ? "Requesting Permissions..." : "Grant Permissions")
+                                .font(ThemeManager.SwiftUIFonts.button)
+                                .fontWeight(.semibold)
+                        }
+                        .foregroundColor(ThemeManager.SwiftUIColors.latte)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 50)
+                        .background(ThemeManager.SwiftUIColors.mocha)
+                        .cornerRadius(ThemeManager.CornerRadius.medium)
+                    }
+                    .disabled(isRequestingPermissions)
+                    .accessibilityLabel("Grant location and notification permissions")
+                    
+                    Button("Skip for Now") {
+                        onPermissionsGranted()
+                    }
+                    .font(ThemeManager.SwiftUIFonts.body)
+                    .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+                    .accessibilityLabel("Skip permission requests for now")
+                }
+                .padding(.horizontal, ThemeManager.Spacing.lg)
+                .padding(.bottom, ThemeManager.Spacing.xl)
+            }
+            .background(ThemeManager.SwiftUIColors.latte)
+            .navigationBarHidden(true)
+        }
+    }
+    
+    // MARK: - Methods
+    
+    /**
+     * Requests both location and notification permissions
+     */
+    private func requestPermissions() {
+        isRequestingPermissions = true
+        
+        Task {
+            do {
+                // Request location permission
+                let locationGranted = await LocationService.shared.requestWhenInUsePermission()
+                logger.info("Location permission granted: \(locationGranted)")
+                
+                // Request notification permission
+                let notificationSettings = try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge])
+                logger.info("Notification permission granted: \(notificationSettings)")
+                
+                await MainActor.run {
+                    isRequestingPermissions = false
+                    onPermissionsGranted()
+                }
+            } catch {
+                logger.error("Failed to request permissions: \(error.localizedDescription)")
+                await MainActor.run {
+                    isRequestingPermissions = false
+                    onPermissionsGranted() // Continue even if permissions fail
+                }
+            }
+        }
+    }
+}
+
+// MARK: - PermissionRowView
+
+/**
+ * PermissionRowView displays a single permission request with icon and description.
+ * Uses ThemeManager for consistent styling and includes accessibility support.
+ */
+struct PermissionRowView: View {
+    
+    // MARK: - Properties
+    
+    let icon: String
+    let title: String
+    let description: String
+    
+    // MARK: - Body
+    
+    var body: some View {
+        HStack(spacing: ThemeManager.Spacing.md) {
+            Image(systemName: icon)
+                .font(.system(size: 24))
+                .foregroundColor(ThemeManager.SwiftUIColors.coral)
+                .frame(width: 30)
+                .accessibilityHidden(true)
+            
+            VStack(alignment: .leading, spacing: ThemeManager.Spacing.xs) {
+                Text(title)
+                    .font(ThemeManager.SwiftUIFonts.headline)
+                    .fontWeight(.semibold)
+                    .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+                
+                Text(description)
+                    .font(ThemeManager.SwiftUIFonts.caption)
+                    .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+                    .multilineTextAlignment(.leading)
+            }
+            
+            Spacer()
+        }
+        .padding(ThemeManager.Spacing.md)
+        .background(ThemeManager.SwiftUIColors.latte)
+        .cornerRadius(ThemeManager.CornerRadius.small)
+        .overlay(
+            RoundedRectangle(cornerRadius: ThemeManager.CornerRadius.small)
+                .stroke(ThemeManager.SwiftUIColors.coral.opacity(0.3), lineWidth: 1)
+        )
     }
 }
 

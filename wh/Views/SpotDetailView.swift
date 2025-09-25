@@ -11,6 +11,7 @@ import MapKit
 import CoreLocation
 import OSLog
 import PhotosUI
+import CloudKit
 
 /**
  * SpotDetailView displays comprehensive information about a selected work spot
@@ -36,6 +37,10 @@ struct SpotDetailView: View {
     
     // Photo picker state
     @State private var selectedImage: UIImage?
+    
+    // CloudKit asset loading state
+    @State private var loadedImages: [String: UIImage] = [:]
+    @State private var loadingImages: Set<String> = []
     
     private let logger = Logger(subsystem: "com.nextsizzle.wh", category: "SpotDetailView")
     
@@ -304,19 +309,12 @@ struct SpotDetailView: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: ThemeManager.Spacing.sm) {
                         ForEach(Array(photos).sorted(by: { $0.timestamp > $1.timestamp }), id: \.objectID) { photo in
-                            if let image = photo.image {
-                                Image(uiImage: image)
-                                    .resizable()
-                                    .aspectRatio(contentMode: .fill)
-                                    .frame(width: 120, height: 120)
-                                    .clipped()
-                                    .cornerRadius(8)
-                                    .accessibilityLabel("Photo taken on \(photo.formattedTimestamp)")
-                            }
+                            photoThumbnailView(photo: photo)
                         }
                     }
                     .padding(.horizontal)
                 }
+                .accessibilityLabel("Photo gallery with \(photos.count) image\(photos.count == 1 ? "" : "s")")
             } else {
                 Text("No photos yet. Be the first to add one!")
                     .font(ThemeManager.SwiftUIFonts.body)
@@ -520,16 +518,13 @@ struct SpotDetailView: View {
     }
     
     private func savePhoto(_ image: UIImage) {
-        guard let imageData = image.jpegData(compressionQuality: 0.7) else {
-            showError("Failed to process image")
-            return
-        }
-        
         let photo = Photo(context: viewContext)
-        photo.image = image
         photo.timestamp = Date()
         photo.spot = spot
         photo.cloudKitRecordID = ""
+        
+        // Set the image which will trigger CloudKit upload
+        photo.image = image
         
         do {
             try viewContext.save()
@@ -537,6 +532,86 @@ struct SpotDetailView: View {
         } catch {
             logger.error("Failed to save photo: \(error.localizedDescription)")
             showError("Failed to save photo: \(error.localizedDescription)")
+        }
+    }
+    
+    private func photoThumbnailView(photo: Photo) -> some View {
+        Group {
+            if let photoAsset = photo.photoAsset, !photoAsset.isEmpty {
+                // CloudKit asset
+                if let image = loadedImages[photoAsset] {
+                    Image(uiImage: image)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .frame(width: 120, height: 120)
+                        .clipped()
+                        .cornerRadius(8)
+                        .accessibilityLabel("Photo taken on \(photo.formattedTimestamp)")
+                } else if loadingImages.contains(photoAsset) {
+                    // Loading state
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(ThemeManager.SwiftUIColors.latte)
+                        .frame(width: 120, height: 120)
+                        .overlay(
+                            ProgressView()
+                                .progressViewStyle(CircularProgressViewStyle(tint: ThemeManager.SwiftUIColors.mocha))
+                        )
+                        .accessibilityLabel("Loading photo")
+                } else {
+                    // Load CloudKit asset
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(ThemeManager.SwiftUIColors.latte)
+                        .frame(width: 120, height: 120)
+                        .overlay(
+                            Image(systemName: "photo")
+                                .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+                                .font(.title2)
+                        )
+                        .onAppear {
+                            loadCloudKitImage(photo: photo, assetID: photoAsset)
+                        }
+                        .accessibilityLabel("Photo taken on \(photo.formattedTimestamp)")
+                }
+            } else if let image = photo.image {
+                // Local image data (fallback)
+                Image(uiImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: 120, height: 120)
+                    .clipped()
+                    .cornerRadius(8)
+                    .accessibilityLabel("Photo taken on \(photo.formattedTimestamp)")
+            } else {
+                // No image available
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(ThemeManager.SwiftUIColors.latte)
+                    .frame(width: 120, height: 120)
+                    .overlay(
+                        Image(systemName: "photo")
+                            .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+                            .font(.title2)
+                    )
+                    .accessibilityLabel("Photo taken on \(photo.formattedTimestamp)")
+            }
+        }
+    }
+    
+    private func loadCloudKitImage(photo: Photo, assetID: String) {
+        guard !loadingImages.contains(assetID) else { return }
+        
+        loadingImages.insert(assetID)
+        
+        Task {
+            if let image = await photo.loadImageFromCloudKit(assetID: assetID) {
+                await MainActor.run {
+                    loadedImages[assetID] = image
+                    loadingImages.remove(assetID)
+                }
+            } else {
+                await MainActor.run {
+                    loadingImages.remove(assetID)
+                }
+            }
         }
     }
     
