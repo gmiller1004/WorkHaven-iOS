@@ -172,13 +172,13 @@ struct SettingsView: View {
                 // Imperial Units Toggle
                 HStack {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("Imperial Units (Miles)")
+                        Text("Imperial Units (miles)")
                             .font(ThemeManager.SwiftUIFonts.body)
                             .foregroundColor(ThemeManager.SwiftUIColors.mocha)
                         
-                        Text("Switch to metric (km) for non-US users.")
-                            .font(ThemeManager.SwiftUIFonts.caption)
-                            .foregroundColor(ThemeManager.SwiftUIColors.mocha.opacity(0.7))
+                        Text("Switch to Metric (km) for non-US users")
+                            .font(.system(size: 12, weight: .regular))
+                            .foregroundColor(.gray)
                             .multilineTextAlignment(.leading)
                     }
                     
@@ -186,7 +186,7 @@ struct SettingsView: View {
                     
                     Toggle("", isOn: $usesImperialUnits)
                         .tint(ThemeManager.SwiftUIColors.mocha)
-                        .accessibilityLabel("Imperial units toggle, \(usesImperialUnits ? "on" : "off")")
+                        .accessibilityLabel("Imperial Units toggle, \(usesImperialUnits ? "on" : "off"), switch to Metric subtitle")
                 }
                 .padding(ThemeManager.Spacing.md)
                 .background(
