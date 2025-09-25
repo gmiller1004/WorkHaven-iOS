@@ -9,12 +9,13 @@
 import SwiftUI
 import MapKit
 import CoreLocation
+import Combine
 import OSLog
 
 /**
  * MapView displays work spots on a MapKit map with comprehensive location information.
- * Features dynamic spot loading from SpotViewModel, user location integration, and accessibility support.
- * Uses @ObservedObject SpotViewModel for spots data and @ObservedObject LocationService for user location.
+ * Features dynamic spot loading from SpotViewModel, user location integration, and "Search Here" functionality.
+ * Uses @ObservedObject SpotViewModel for spots data and map state management.
  * Implements ThemeManager for consistent styling with coral annotation pins and latte background.
  */
 struct MapView: View {
@@ -24,26 +25,28 @@ struct MapView: View {
     @ObservedObject var spotViewModel: SpotViewModel
     @ObservedObject private var locationService = LocationService.shared
     
+    @State private var mapRegion: MKCoordinateRegion
+    
     private let logger = Logger(subsystem: "com.nextsizzle.wh", category: "MapView")
     
-    // MARK: - Computed Properties
+    // MARK: - Initialization
     
-    /**
-     * Initial map region centered on user location or fallback to San Francisco
-     */
-    private var initialRegion: MKCoordinateRegion {
-        let fallbackLocation = CLLocation(latitude: 37.7749, longitude: -122.4194)
-        let centerLocation = locationService.currentLocation ?? fallbackLocation
+    init(spotViewModel: SpotViewModel) {
+        self.spotViewModel = spotViewModel
         
-        if locationService.currentLocation == nil {
-            logger.debug("User location not available, using fallback location for map center")
+        // Initialize map region based on SpotViewModel's current region or fallback
+        if let currentRegion = spotViewModel.currentMapRegion {
+            self._mapRegion = State(initialValue: currentRegion)
+        } else {
+            let fallbackLocation = CLLocation(latitude: 37.7749, longitude: -122.4194)
+            self._mapRegion = State(initialValue: MKCoordinateRegion(
+                center: fallbackLocation.coordinate,
+                span: MKCoordinateSpan(latitudeDelta: 0.05, longitudeDelta: 0.05)
+            ))
         }
-        
-        return MKCoordinateRegion(
-            center: centerLocation.coordinate,
-            span: MKCoordinateSpan(latitudeDelta: 0.05, longitudeDelta: 0.05)
-        )
     }
+    
+    // MARK: - Computed Properties
     
     /**
      * Map annotations for each spot
@@ -66,17 +69,42 @@ struct MapView: View {
                 ThemeManager.SwiftUIColors.latte
                     .ignoresSafeArea()
                 
-                if spotViewModel.spots.isEmpty {
+                if spotViewModel.spots.isEmpty && !spotViewModel.isSeeding {
                     // Empty state
                     emptyStateView
                 } else {
                     // Map with spots
                     mapContent
                 }
+                
+                // Search Here button overlay
+                VStack {
+                    Spacer()
+                    
+                    HStack {
+                        Spacer()
+                        
+                        searchHereButton
+                            .padding(.trailing, ThemeManager.Spacing.md)
+                            .padding(.bottom, ThemeManager.Spacing.lg)
+                        
+                        Spacer()
+                    }
+                }
+                
+                // Progress overlay when searching
+                if spotViewModel.isSeeding {
+                    progressOverlay
+                }
             }
             .navigationTitle("Map")
             .navigationBarTitleDisplayMode(.large)
             .background(ThemeManager.SwiftUIColors.latte)
+            .onReceive(spotViewModel.$currentMapRegion) { newRegion in
+                if let newRegion = newRegion {
+                    mapRegion = newRegion
+                }
+            }
         }
     }
     
@@ -86,7 +114,7 @@ struct MapView: View {
      * Main map content with annotations
      */
     private var mapContent: some View {
-        Map(coordinateRegion: .constant(initialRegion), annotationItems: mapAnnotations) { annotation in
+        Map(coordinateRegion: $mapRegion, annotationItems: mapAnnotations) { annotation in
             MapAnnotation(coordinate: annotation.coordinate) {
                 VStack(spacing: 2) {
                     // Custom annotation pin
@@ -161,6 +189,70 @@ struct MapView: View {
         .padding(.horizontal, ThemeManager.Spacing.lg)
     }
     
+    /**
+     * Search Here button overlay
+     */
+    private var searchHereButton: some View {
+        Button(action: {
+            searchHere()
+        }) {
+            HStack(spacing: ThemeManager.Spacing.sm) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 16, weight: .medium))
+                
+                Text("Search Here")
+                    .font(ThemeManager.SwiftUIFonts.body)
+                    .fontWeight(.medium)
+            }
+            .foregroundColor(ThemeManager.SwiftUIColors.coral)
+            .padding(.horizontal, ThemeManager.Spacing.md)
+            .padding(.vertical, ThemeManager.Spacing.sm)
+            .background(
+                RoundedRectangle(cornerRadius: ThemeManager.CornerRadius.medium)
+                    .fill(ThemeManager.SwiftUIColors.latte)
+                    .shadow(
+                        color: ThemeManager.SwiftUIColors.mocha.opacity(0.2),
+                        radius: 4,
+                        x: 0,
+                        y: 2
+                    )
+            )
+        }
+        .disabled(spotViewModel.isSeeding)
+        .accessibilityLabel("Search Here button")
+        .accessibilityHint("Search for work spots at the current map location")
+    }
+    
+    /**
+     * Progress overlay when searching for spots
+     */
+    private var progressOverlay: some View {
+        VStack(spacing: ThemeManager.Spacing.md) {
+            ProgressView()
+                .scaleEffect(1.2)
+                .progressViewStyle(CircularProgressViewStyle(tint: ThemeManager.SwiftUIColors.coral))
+            
+            if !spotViewModel.discoveryProgress.isEmpty {
+                Text(spotViewModel.discoveryProgress)
+                    .font(ThemeManager.SwiftUIFonts.body)
+                    .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+                    .multilineTextAlignment(.center)
+            }
+        }
+        .padding(ThemeManager.Spacing.lg)
+        .background(
+            RoundedRectangle(cornerRadius: ThemeManager.CornerRadius.medium)
+                .fill(ThemeManager.SwiftUIColors.latte)
+                .shadow(
+                    color: ThemeManager.SwiftUIColors.mocha.opacity(0.1),
+                    radius: 4,
+                    x: 0,
+                    y: 2
+                )
+        )
+        .accessibilityLabel("Searching for spots")
+    }
+    
     // MARK: - Helper Methods
     
     /**
@@ -187,6 +279,17 @@ struct MapView: View {
             return "deskclock.fill"
         default:
             return "questionmark.circle.fill"
+        }
+    }
+    
+    /**
+     * Searches for spots at the current map center location
+     */
+    private func searchHere() {
+        logger.info("Search Here button tapped at \(mapRegion.center.latitude), \(mapRegion.center.longitude)")
+        
+        Task {
+            await spotViewModel.searchHere(at: mapRegion.center, radius: 32186.88) // 20 miles in meters
         }
     }
 }
