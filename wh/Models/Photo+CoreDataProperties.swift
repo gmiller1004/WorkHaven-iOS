@@ -32,6 +32,12 @@ extension Photo {
     /// CloudKit record identifier for synchronization
     @NSManaged public var cloudKitRecordID: String
     
+    /// Number of likes for this photo
+    @NSManaged public var likes: Int16
+    
+    /// Number of dislikes for this photo
+    @NSManaged public var dislikes: Int16
+    
     /// The spot this photo belongs to (many-to-one relationship)
     @NSManaged public var spot: Spot?
 

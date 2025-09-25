@@ -82,6 +82,8 @@ public class Photo: NSManagedObject {
         timestamp = Date()
         cloudKitRecordID = ""
         photoAsset = nil
+        likes = 0
+        dislikes = 0
     }
     
     public override func awakeFromFetch() {
@@ -192,6 +194,8 @@ public class Photo: NSManagedObject {
             record["imageAsset"] = asset
             record["timestamp"] = timestamp
             record["spotID"] = spot?.cloudKitRecordID ?? ""
+            record["likes"] = likes
+            record["dislikes"] = dislikes
             
             // Upload to CloudKit
             let container = CKContainer.default()
@@ -249,6 +253,78 @@ public class Photo: NSManagedObject {
         } catch {
             print("Failed to load image from CloudKit: \(error.localizedDescription)")
             return nil
+        }
+    }
+    
+    // MARK: - Likes and Dislikes Methods
+    
+    /// Adds a like to this photo and syncs to CloudKit
+    public func addLike() {
+        likes += 1
+        syncLikesToCloudKit()
+    }
+    
+    /// Removes a like from this photo and syncs to CloudKit
+    public func removeLike() {
+        if likes > 0 {
+            likes -= 1
+            syncLikesToCloudKit()
+        }
+    }
+    
+    /// Adds a dislike to this photo and syncs to CloudKit
+    public func addDislike() {
+        dislikes += 1
+        syncLikesToCloudKit()
+    }
+    
+    /// Removes a dislike from this photo and syncs to CloudKit
+    public func removeDislike() {
+        if dislikes > 0 {
+            dislikes -= 1
+            syncLikesToCloudKit()
+        }
+    }
+    
+    /// Returns the net score (likes - dislikes) for this photo
+    public var netScore: Int16 {
+        return likes - dislikes
+    }
+    
+    /// Returns a formatted string showing likes and dislikes
+    public var likesDislikesString: String {
+        if likes == 0 && dislikes == 0 {
+            return "No reactions yet"
+        } else if dislikes == 0 {
+            return "\(likes) like\(likes == 1 ? "" : "s")"
+        } else if likes == 0 {
+            return "\(dislikes) dislike\(dislikes == 1 ? "" : "s")"
+        } else {
+            return "\(likes) like\(likes == 1 ? "" : "s"), \(dislikes) dislike\(dislikes == 1 ? "" : "s")"
+        }
+    }
+    
+    /// Syncs likes and dislikes to CloudKit
+    private func syncLikesToCloudKit() {
+        guard !cloudKitRecordID.isEmpty else { return }
+        
+        Task {
+            do {
+                let container = CKContainer.default()
+                let database = container.privateCloudDatabase
+                
+                let recordID = CKRecord.ID(recordName: cloudKitRecordID)
+                let record = try await database.record(for: recordID)
+                
+                record["likes"] = likes
+                record["dislikes"] = dislikes
+                
+                let _ = try await database.save(record)
+                print("Successfully synced likes/dislikes to CloudKit")
+                
+            } catch {
+                print("Failed to sync likes/dislikes to CloudKit: \(error.localizedDescription)")
+            }
         }
     }
 }
