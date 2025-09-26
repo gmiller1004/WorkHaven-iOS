@@ -29,6 +29,11 @@ struct SpotListView: View {
     
     private let logger = Logger(subsystem: "com.nextsizzle.wh", category: "SpotListView")
     
+    // iPad detection
+    private var isIPad: Bool {
+        UIDevice.current.userInterfaceIdiom == .pad
+    }
+    
     // MARK: - Sort Options
     
     enum SortOption: String, CaseIterable {
@@ -204,9 +209,9 @@ struct SpotListView: View {
                 .listRowSeparator(.hidden)
                 .listRowInsets(EdgeInsets(
                     top: ThemeManager.Spacing.sm,
-                    leading: ThemeManager.Spacing.md,
+                    leading: isIPad ? 20 : ThemeManager.Spacing.md,
                     bottom: ThemeManager.Spacing.sm,
-                    trailing: ThemeManager.Spacing.md
+                    trailing: isIPad ? 20 : ThemeManager.Spacing.md
                 ))
             }
         }
@@ -296,7 +301,7 @@ struct SpotListView: View {
             // Category filter row
             categoryFilterRow
         }
-        .padding(.horizontal, ThemeManager.Spacing.md)
+        .padding(.horizontal, isIPad ? 20 : ThemeManager.Spacing.md)
         .padding(.vertical, ThemeManager.Spacing.sm)
         .background(ThemeManager.SwiftUIColors.latte)
     }
@@ -512,6 +517,11 @@ public struct SpotListRowView: View {
         self.usesImperialUnits = usesImperialUnits
     }
     
+    // iPad detection
+    private var isIPad: Bool {
+        UIDevice.current.userInterfaceIdiom == .pad
+    }
+    
     private var distance: Double {
         let fallbackLocation = CLLocation(latitude: 37.7749, longitude: -122.4194)
         let locationToUse = userLocation ?? fallbackLocation
@@ -561,13 +571,13 @@ public struct SpotListRowView: View {
                             .foregroundColor(ThemeManager.SwiftUIColors.coral)
                         
                         Text(spot.name)
-                            .font(ThemeManager.SwiftUIFonts.headline)
+                            .font(isIPad ? .system(size: 18, weight: .semibold) : ThemeManager.SwiftUIFonts.headline)
                             .foregroundColor(ThemeManager.SwiftUIColors.mocha)
                             .lineLimit(1)
                     }
                     
                     Text(spot.address)
-                        .font(ThemeManager.SwiftUIFonts.caption)
+                        .font(isIPad ? .system(size: 18) : ThemeManager.SwiftUIFonts.caption)
                         .foregroundColor(ThemeManager.SwiftUIColors.mocha.opacity(0.7))
                         .lineLimit(2)
                 }
@@ -593,35 +603,48 @@ public struct SpotListRowView: View {
                 }
             }
             
-            // Rating indicators
-            HStack(spacing: ThemeManager.Spacing.md) {
+            // Rating indicators with improved iPad layout
+            HStack(spacing: isIPad ? ThemeManager.Spacing.lg : ThemeManager.Spacing.md) {
                 // WiFi rating
-                HStack(spacing: 2) {
+                HStack(spacing: 4) {
                     Image(systemName: "wifi")
-                        .font(.system(size: 14))
+                        .font(.system(size: isIPad ? 16 : 14))
                         .foregroundColor(ThemeManager.SwiftUIColors.mocha.opacity(0.6))
                     
                     WiFiSignalBars(rating: Int(spot.wifiRating))
                 }
                 
                 // Noise rating
-                HStack(spacing: 2) {
+                HStack(spacing: 4) {
                     Image(systemName: "speaker.wave.2")
-                        .font(.system(size: 14))
+                        .font(.system(size: isIPad ? 16 : 14))
                         .foregroundColor(ThemeManager.SwiftUIColors.mocha.opacity(0.6))
                     
                     NoiseLevelIndicator(level: spot.noiseRating)
                 }
                 
                 // Outlets indicator
-                HStack(spacing: 2) {
+                HStack(spacing: 4) {
                     Image(systemName: "powerplug")
-                        .font(.system(size: 14))
+                        .font(.system(size: isIPad ? 16 : 14))
                         .foregroundColor(ThemeManager.SwiftUIColors.mocha.opacity(0.6))
                     
                     Image(systemName: spot.outlets ? "checkmark.circle.fill" : "xmark.circle.fill")
-                        .font(.system(size: 12))
+                        .font(.system(size: isIPad ? 14 : 12))
                         .foregroundColor(spot.outlets ? ThemeManager.SwiftUIColors.coral : .red.opacity(0.6))
+                }
+                
+                // Type icon for iPad (additional visual indicator)
+                if isIPad {
+                    HStack(spacing: 4) {
+                        Image(systemName: typeIcon)
+                            .font(.system(size: 16))
+                            .foregroundColor(ThemeManager.SwiftUIColors.mocha.opacity(0.6))
+                        
+                        Text(spotTypeDescription)
+                            .font(.system(size: 14))
+                            .foregroundColor(ThemeManager.SwiftUIColors.mocha.opacity(0.6))
+                    }
                 }
                 
                 Spacer()
@@ -636,7 +659,7 @@ public struct SpotListRowView: View {
                     .lineLimit(2)
             }
         }
-        .padding(ThemeManager.Spacing.md)
+        .padding(isIPad ? 20 : ThemeManager.Spacing.md)
         .background(
             RoundedRectangle(cornerRadius: ThemeManager.CornerRadius.medium)
                 .fill(Color.white)
