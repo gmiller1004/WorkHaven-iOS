@@ -56,7 +56,9 @@ struct MapView: View {
         return spotViewModel.spots.map { spot in
             MapAnnotationItem(
                 coordinate: CLLocationCoordinate2D(latitude: spot.latitude, longitude: spot.longitude),
-                title: spot.name
+                title: spot.name,
+                subtitle: spot.address,
+                spot: spot
             )
         }
     }
@@ -139,41 +141,46 @@ struct MapView: View {
     // MARK: - Views
     
     /**
-     * Main map content with annotations
+     * Main map content with clickable annotations
      */
     private var mapContent: some View {
         Map(coordinateRegion: $mapRegion, annotationItems: mapAnnotations) { annotation in
             MapAnnotation(coordinate: annotation.coordinate) {
-                VStack(spacing: 2) {
-                    // Custom annotation pin
-                    ZStack {
-                        // Pin background
-                        Circle()
-                            .fill(ThemeManager.SwiftUIColors.coral)
-                            .frame(width: 30, height: 30)
-                            .shadow(color: .black.opacity(0.3), radius: 2, x: 0, y: 1)
+                NavigationLink(destination: SpotDetailView(spot: annotation.spot, locationService: LocationService.shared)) {
+                    VStack(spacing: 2) {
+                        // Custom annotation pin
+                        ZStack {
+                            // Pin background
+                            Circle()
+                                .fill(ThemeManager.SwiftUIColors.coral)
+                                .frame(width: 30, height: 30)
+                                .shadow(color: .black.opacity(0.3), radius: 2, x: 0, y: 1)
+                            
+                            // Pin icon based on spot type
+                            Image(systemName: typeIcon(for: annotation))
+                                .font(.system(size: 14, weight: .medium))
+                                .foregroundColor(.white)
+                        }
                         
-                        // Pin icon based on spot type
-                        Image(systemName: typeIcon(for: annotation))
-                            .font(.system(size: 14, weight: .medium))
-                            .foregroundColor(.white)
+                        // Spot name label
+                        Text(annotation.title)
+                            .font(ThemeManager.SwiftUIFonts.caption)
+                            .fontWeight(.medium)
+                            .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(
+                                RoundedRectangle(cornerRadius: 4)
+                                    .fill(ThemeManager.SwiftUIColors.latte)
+                                    .shadow(color: .black.opacity(0.1), radius: 1, x: 0, y: 1)
+                            )
+                            .lineLimit(1)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
-                    
-                    // Spot name label
-                    Text(annotation.title)
-                        .font(ThemeManager.SwiftUIFonts.caption)
-                        .fontWeight(.medium)
-                        .foregroundColor(ThemeManager.SwiftUIColors.mocha)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(
-                            RoundedRectangle(cornerRadius: 4)
-                                .fill(ThemeManager.SwiftUIColors.latte)
-                                .shadow(color: .black.opacity(0.1), radius: 1, x: 0, y: 1)
-                        )
-                        .lineLimit(1)
-                        .fixedSize(horizontal: false, vertical: true)
                 }
+                .buttonStyle(PlainButtonStyle())
+                .accessibilityLabel("Tap to view \(annotation.title) details")
+                .accessibilityHint("Navigate to spot details for \(annotation.title)")
             }
         }
         .accessibilityLabel("Map showing \(spotViewModel.spots.count) spots")
@@ -378,6 +385,8 @@ struct MapAnnotationItem: Identifiable {
     let id = UUID()
     let coordinate: CLLocationCoordinate2D
     let title: String
+    let subtitle: String
+    let spot: Spot
 }
 
 

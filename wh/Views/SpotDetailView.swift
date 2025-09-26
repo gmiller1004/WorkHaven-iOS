@@ -222,7 +222,7 @@ struct SpotDetailView: View {
                 Map(coordinateRegion: .constant(MKCoordinateRegion(
                     center: CLLocationCoordinate2D(latitude: spot.latitude, longitude: spot.longitude),
                     span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
-                )), annotationItems: [MapAnnotationItem(coordinate: CLLocationCoordinate2D(latitude: spot.latitude, longitude: spot.longitude), title: spot.name)]) { item in
+                )), annotationItems: [MapAnnotationItem(coordinate: CLLocationCoordinate2D(latitude: spot.latitude, longitude: spot.longitude), title: spot.name, subtitle: spot.address, spot: spot)]) { item in
                     MapAnnotation(coordinate: item.coordinate) {
                         VStack {
                             Image(systemName: "mappin.circle.fill")
@@ -516,7 +516,7 @@ struct SpotDetailView: View {
             Map(coordinateRegion: .constant(MKCoordinateRegion(
                 center: CLLocationCoordinate2D(latitude: spot.latitude, longitude: spot.longitude),
                 span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
-            )), annotationItems: [MapAnnotationItem(coordinate: CLLocationCoordinate2D(latitude: spot.latitude, longitude: spot.longitude), title: spot.name)]) { item in
+            )), annotationItems: [MapAnnotationItem(coordinate: CLLocationCoordinate2D(latitude: spot.latitude, longitude: spot.longitude), title: spot.name, subtitle: spot.address, spot: spot)]) { item in
                 MapAnnotation(coordinate: item.coordinate) {
                     VStack {
                         Image(systemName: "mappin.circle.fill")
