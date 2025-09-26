@@ -226,6 +226,9 @@ class SpotViewModel: ObservableObject {
                     }
                 }
                 
+                // Schedule notifications for high-rated spots if nearby alerts are enabled
+                await scheduleNotificationsForHighRatedSpots(sortedSpots)
+                
                 logger.info("Successfully discovered and loaded \(sortedSpots.count) spots")
             } else {
                 logger.info("Sufficient spots found, using existing spots")
@@ -514,6 +517,9 @@ class SpotViewModel: ObservableObject {
             logger.info("Updated map region to center on discovery location \(near.coordinate.latitude), \(near.coordinate.longitude)")
         }
         
+        // Schedule notifications for high-rated spots if nearby alerts are enabled
+        await scheduleNotificationsForHighRatedSpots(sortedSpots)
+        
         logger.info("Successfully loaded \(sortedSpots.count) spots")
     }
     
@@ -670,6 +676,37 @@ class SpotViewModel: ObservableObject {
         }
         
         logger.info("Rating refresh completed for \(spots.count) spots")
+    }
+    
+    /**
+     * Schedules nearby alerts for high-rated spots if nearby alerts are enabled
+     * - Parameter spots: Array of spots to check for notification scheduling
+     */
+    private func scheduleNotificationsForHighRatedSpots(_ spots: [Spot]) async {
+        // Check if nearby alerts are enabled
+        let nearbyAlertsEnabled = UserDefaults.standard.bool(forKey: "NearbyAlertsEnabled")
+        
+        guard nearbyAlertsEnabled else {
+            logger.debug("Nearby alerts are disabled, skipping notification scheduling")
+            return
+        }
+        
+        logger.info("Scheduling notifications for high-rated spots (threshold: >4.0)")
+        
+        var notificationsScheduled = 0
+        
+        for spot in spots {
+            let overallRating = calculateOverallRating(for: spot)
+            
+            // Only schedule notifications for spots with rating > 4.0
+            if overallRating > 4.0 {
+                NotificationManager.shared.scheduleNearbyAlert(for: spot, radius: 1609.34, condition: 4.0)
+                notificationsScheduled += 1
+                logger.info("Scheduled notification for high-rated spot: \(spot.name) (rating: \(String(format: "%.1f", overallRating)))")
+            }
+        }
+        
+        logger.info("Scheduled \(notificationsScheduled) notifications for high-rated spots")
     }
     
     // MARK: - Helper Methods

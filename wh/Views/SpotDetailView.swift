@@ -23,6 +23,7 @@ struct SpotDetailView: View {
     @ObservedObject var spot: Spot
     @ObservedObject var locationService: LocationService
     @AppStorage("usesImperialUnits") private var usesImperialUnits: Bool = true
+    @StateObject private var notificationManager = NotificationManager.shared
     
     @State private var showingMap = false
     @State private var showingImagePicker = false
@@ -47,6 +48,9 @@ struct SpotDetailView: View {
     @State private var outletsAvailable = true
     @State private var userTip = ""
     
+    // Favorite state
+    @State private var isFavorited: Bool = false
+    
     // Photo picker state
     @State private var selectedImage: UIImage?
     
@@ -55,6 +59,42 @@ struct SpotDetailView: View {
     @State private var loadingImages: Set<String> = []
     
     private let logger = Logger(subsystem: "com.nextsizzle.wh", category: "SpotDetailView")
+    
+    // MARK: - Favorite Methods
+    
+    /**
+     * Toggles the favorite status of the spot
+     */
+    private func toggleFavorite() {
+        if isFavorited {
+            // Remove from favorites
+            spot.removeFromFavorites(in: viewContext)
+            isFavorited = false
+            logger.info("Removed spot '\(spot.name)' from favorites")
+        } else {
+            // Add to favorites
+            spot.addToFavorites(in: viewContext)
+            isFavorited = true
+            logger.info("Added spot '\(spot.name)' to favorites")
+            
+            // Schedule community update notification if enabled
+            if UserDefaults.standard.bool(forKey: "CommunityUpdatesEnabled") {
+                notificationManager.scheduleCommunityUpdate(for: spot, activityType: "favorite")
+                logger.info("Scheduled community update notification for favorited spot")
+            }
+        }
+        
+        // Save changes to Core Data and CloudKit
+        saveContext()
+    }
+    
+    /**
+     * Initializes the favorite status based on existing UserFavorite entities
+     */
+    private func initializeFavoriteStatus() {
+        isFavorited = spot.isFavorited
+        logger.debug("Initialized favorite status for '\(spot.name)': \(isFavorited)")
+    }
     
     var body: some View {
         NavigationView {
@@ -115,6 +155,9 @@ struct SpotDetailView: View {
             } message: {
                 Text("Are you sure you want to submit this tip?")
             }
+            .onAppear {
+                initializeFavoriteStatus()
+            }
         }
     }
     
@@ -134,6 +177,19 @@ struct SpotDetailView: View {
                     .fontWeight(.bold)
                     .foregroundColor(ThemeManager.SwiftUIColors.mocha)
                     .accessibilityLabel("\(spotTypeDescription), \(spot.name), header icon")
+                
+                Spacer()
+                
+                // Favorite button
+                Button(action: {
+                    toggleFavorite()
+                }) {
+                    Image(systemName: isFavorited ? "heart.fill" : "heart")
+                        .font(.system(size: 24))
+                        .foregroundColor(isFavorited ? ThemeManager.SwiftUIColors.coral : .gray)
+                }
+                .accessibilityLabel(isFavorited ? "Remove from favorites" : "Add to favorites")
+                .accessibilityHint("Tap to \(isFavorited ? "unfavorite" : "favorite") this spot")
             }
             
             Text(spot.address)
@@ -1023,108 +1079,119 @@ struct PhotoViewer: View {
                                 onDislike(photos[selectedIndex])
                             }) {
                                 Image(systemName: "hand.thumbsdown.fill")
-                                    .font(.title2)
+                                    .font(.system(size: 24))
                                     .foregroundColor(ThemeManager.SwiftUIColors.coral)
                             }
-                            .accessibilityLabel("Thumbs down button")
+                            .accessibilityLabel("Thumbs down")
                             
-                            // Photo counter
-                            Text("\(selectedIndex + 1) of \(photos.count)")
-                                .font(ThemeManager.SwiftUIFonts.body)
-                                .foregroundColor(.white)
-                                .accessibilityLabel("Photo \(selectedIndex + 1) of \(photos.count)")
+                            Spacer()
                             
                             // Thumbs up button
                             Button(action: {
                                 onLike(photos[selectedIndex])
                             }) {
                                 Image(systemName: "hand.thumbsup.fill")
-                                    .font(.title2)
+                                    .font(.system(size: 24))
                                     .foregroundColor(ThemeManager.SwiftUIColors.coral)
                             }
-                            .accessibilityLabel("Thumbs up button")
+                            .accessibilityLabel("Thumbs up")
+                            
+                            Spacer()
+                            
+                            // Flag button
+                            Button(action: {
+                                onFlag(photos[selectedIndex])
+                            }) {
+                                Image(systemName: "flag.fill")
+                                    .font(.system(size: 24))
+                                    .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+                            }
+                            .accessibilityLabel("Flag as inappropriate")
                         }
-                        .padding()
-                        .background(Color.black.opacity(0.7))
-                        .cornerRadius(ThemeManager.CornerRadius.medium)
-                        .padding(.bottom, 50)
+                        .padding(.horizontal, ThemeManager.Spacing.lg)
+                        .padding(.bottom, ThemeManager.Spacing.xl)
                     }
                 }
             )
         }
     }
     
+    // MARK: - Helper Views
+    
     private func photoView(photo: Photo, index: Int) -> some View {
-        Group {
-            if let photoAsset = photo.photoAsset, !photoAsset.isEmpty {
-                // CloudKit asset
-                if let image = loadedImages[photoAsset] {
-                    Image(uiImage: image)
-                        .resizable()
-                        .aspectRatio(contentMode: .fit)
-                        .ignoresSafeArea()
-                        .accessibilityLabel("Photo \(index + 1) of \(photos.count)")
-                } else if loadingImages.contains(photoAsset) {
-                    // Loading state
-                    ProgressView()
-                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                        .scaleEffect(2.0)
-                        .accessibilityLabel("Loading photo")
-                } else {
-                    // Load CloudKit asset
-                    Rectangle()
-                        .fill(Color.gray)
-                        .overlay(
-                            ProgressView()
-                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                                .scaleEffect(2.0)
-                        )
-                        .onAppear {
-                            loadCloudKitImage(photo: photo, assetID: photoAsset)
-                        }
-                        .accessibilityLabel("Photo \(index + 1) of \(photos.count)")
-                }
-            } else if let image = photo.image {
-                // Local image data (fallback)
+        ZStack {
+            if let image = loadedImages[photo.photoAsset ?? ""] {
                 Image(uiImage: image)
                     .resizable()
                     .aspectRatio(contentMode: .fit)
-                    .ignoresSafeArea()
-                    .accessibilityLabel("Photo \(index + 1) of \(photos.count)")
+                    .clipped()
             } else {
-                // No image available
                 Rectangle()
-                    .fill(Color.gray)
+                    .fill(Color.gray.opacity(0.3))
                     .overlay(
-                        Image(systemName: "photo")
-                            .foregroundColor(.white)
-                            .font(.largeTitle)
+                        VStack {
+                            if loadingImages.contains(photo.photoAsset ?? "") {
+                                ProgressView()
+                                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                    .scaleEffect(1.5)
+                            } else {
+                                Image(systemName: "photo")
+                                    .font(.system(size: 48))
+                                    .foregroundColor(.white.opacity(0.6))
+                            }
+                        }
                     )
-                    .accessibilityLabel("Photo \(index + 1) of \(photos.count)")
+                    .onAppear {
+                        loadImageFromCloudKit(photo: photo)
+                    }
             }
         }
     }
     
-    private func loadCloudKitImage(photo: Photo, assetID: String) {
-        guard !loadingImages.contains(assetID) else { return }
+    // MARK: - Helper Methods
+    
+    private func loadImageFromCloudKit(photo: Photo) {
+        guard let photoAsset = photo.photoAsset, !photoAsset.isEmpty else { return }
         
-        loadingImages.insert(assetID)
+        // Check if already loaded
+        if loadedImages[photoAsset] != nil { return }
+        
+        // Check if already loading
+        if loadingImages.contains(photoAsset) { return }
+        
+        loadingImages.insert(photoAsset)
         
         Task {
-            if let image = await photo.loadImageFromCloudKit(assetID: assetID) {
-                await MainActor.run {
-                    loadedImages[assetID] = image
-                    loadingImages.remove(assetID)
+            do {
+                let container = CKContainer.default()
+                let database = container.privateCloudDatabase
+                let recordID = CKRecord.ID(recordName: photoAsset)
+                
+                let record = try await database.record(for: recordID)
+                
+                if let asset = record["photoAsset"] as? CKAsset,
+                   let fileURL = asset.fileURL,
+                   let imageData = try? Data(contentsOf: fileURL),
+                   let image = UIImage(data: imageData) {
+                    
+                    await MainActor.run {
+                        loadedImages[photoAsset] = image
+                        loadingImages.remove(photoAsset)
+                    }
+                } else {
+                    await MainActor.run {
+                        loadingImages.remove(photoAsset)
+                    }
                 }
-            } else {
+            } catch {
+                logger.error("Failed to load image from CloudKit: \(error.localizedDescription)")
                 await MainActor.run {
-                    loadingImages.remove(assetID)
+                    loadingImages.remove(photoAsset)
                 }
             }
         }
     }
 }
-
 // MARK: - Image Picker
 
 struct ImagePicker: UIViewControllerRepresentable {
@@ -1168,12 +1235,6 @@ struct ImagePicker: UIViewControllerRepresentable {
 }
 
 // MARK: - Map Annotation Item
-
-struct MapAnnotationItem: Identifiable {
-    let id = UUID()
-    let coordinate: CLLocationCoordinate2D
-    let title: String
-}
 
 // MARK: - Extensions
 

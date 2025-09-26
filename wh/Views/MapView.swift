@@ -372,6 +372,14 @@ struct MapView: View {
     }
 }
 
+// MARK: - Supporting Structures
+
+struct MapAnnotationItem: Identifiable {
+    let id = UUID()
+    let coordinate: CLLocationCoordinate2D
+    let title: String
+}
+
 
 // MARK: - Preview
 
