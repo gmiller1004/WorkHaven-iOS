@@ -105,8 +105,7 @@ struct SpotListView: View {
     // MARK: - Body
     
     var body: some View {
-        NavigationView {
-            ZStack {
+        ZStack {
                 // Background
                 ThemeManager.SwiftUIColors.latte
                     .ignoresSafeArea()
@@ -191,7 +190,6 @@ struct SpotListView: View {
                     showingError = true
                 }
             }
-        }
     }
     
     // MARK: - Views

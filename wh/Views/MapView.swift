@@ -57,8 +57,7 @@ struct MapView: View {
     // MARK: - Body
     
     var body: some View {
-        NavigationView {
-            ZStack {
+        ZStack {
                 // Background
                 ThemeManager.SwiftUIColors.latte
                     .ignoresSafeArea()
@@ -130,7 +129,6 @@ struct MapView: View {
                 Text(spotViewModel.errorMessage ?? "An error occurred while searching for spots")
                     .foregroundColor(ThemeManager.SwiftUIColors.mocha)
             }
-        }
     }
     
     // MARK: - Views

@@ -42,8 +42,7 @@ struct SettingsView: View {
     // MARK: - Body
     
     var body: some View {
-        NavigationView {
-            ZStack {
+        ZStack {
                 // Background
                 ThemeManager.SwiftUIColors.latte
                     .ignoresSafeArea()
@@ -112,7 +111,6 @@ struct SettingsView: View {
             .onAppear {
                 initializeDistanceUnits()
             }
-        }
     }
     
     // MARK: - Settings Content
