@@ -38,6 +38,9 @@ class SpotViewModel: ObservableObject {
     /// Current map region for MapView state management
     @Published var currentMapRegion: MKCoordinateRegion?
     
+    /// Indicates if empty state should be shown (no spots found)
+    @Published var showEmptyState: Bool = false
+    
     // MARK: - Private Properties
     
     private let persistenceController: PersistenceController
@@ -82,9 +85,10 @@ class SpotViewModel: ObservableObject {
         // Debug: Check total spots in database
         debugSpotCount()
         
-        // Clear any previous errors
+        // Clear any previous errors and reset empty state
         errorMessage = nil
         isSeeding = true
+        showEmptyState = false
         
         do {
             let existingSpots = try await fetchExistingSpots(near: near)
@@ -100,9 +104,15 @@ class SpotViewModel: ObservableObject {
                 logger.info("Using existing spots (\(existingSpots.count) found)")
                 // Refresh ratings for existing spots
                 await refreshRatings(for: existingSpots)
+                
+                // Refresh Core Data context to ensure latest data
+                let viewContext = PersistenceController.shared.container.viewContext
+                viewContext.refreshAllObjects()
+                
                 await MainActor.run {
                     self.spots = self.sortSpots(existingSpots, from: near)
                     self.isSeeding = false
+                    self.showEmptyState = self.spots.isEmpty
                     
                     // Update map region to center on the location used for loading spots
                     if let location = near {
@@ -120,6 +130,7 @@ class SpotViewModel: ObservableObject {
             await MainActor.run {
                 self.errorMessage = "Failed to load spots: \(error.localizedDescription)"
                 self.isSeeding = false
+                self.showEmptyState = self.spots.isEmpty
             }
         }
     }
@@ -215,10 +226,15 @@ class SpotViewModel: ObservableObject {
                 // Sort by distance from center then by overall rating
                 let sortedSpots = sortSpots(allSpots, from: centerLocation)
                 
+                // Refresh Core Data context to ensure latest data
+                let viewContext = PersistenceController.shared.container.viewContext
+                viewContext.refreshAllObjects()
+                
                 await MainActor.run {
                     self.spots = sortedSpots
                     self.isSeeding = false
                     self.discoveryProgress = ""
+                    self.showEmptyState = self.spots.isEmpty
                     
                     // If we still have fewer than threshold spots and no new spots were added
                     if allSpots.count < threshold && deduplicatedSpots.isEmpty {
@@ -236,10 +252,15 @@ class SpotViewModel: ObservableObject {
                 // Sort existing spots by distance from center then by overall rating
                 let sortedSpots = sortSpots(existingSpots, from: centerLocation)
                 
+                // Refresh Core Data context to ensure latest data
+                let viewContext = PersistenceController.shared.container.viewContext
+                viewContext.refreshAllObjects()
+                
                 await MainActor.run {
                     self.spots = sortedSpots
                     self.isSeeding = false
                     self.discoveryProgress = ""
+                    self.showEmptyState = self.spots.isEmpty
                 }
                 
                 logger.info("Using \(sortedSpots.count) existing spots")
@@ -259,6 +280,7 @@ class SpotViewModel: ObservableObject {
                 self.errorMessage = "Failed to search for spots: \(error.localizedDescription)"
                 self.isSeeding = false
                 self.discoveryProgress = ""
+                self.showEmptyState = self.spots.isEmpty
             }
         }
     }
@@ -503,11 +525,16 @@ class SpotViewModel: ObservableObject {
         // Sort spots by distance and rating
         let sortedSpots = sortSpots(discoveredSpots, from: near)
         
+        // Refresh Core Data context to ensure latest data
+        let viewContext = PersistenceController.shared.container.viewContext
+        viewContext.refreshAllObjects()
+        
         // Update spots and ensure UI refresh
         await MainActor.run {
             self.spots = sortedSpots
             self.isSeeding = false
             self.discoveryProgress = ""
+            self.showEmptyState = self.spots.isEmpty
             
             // Update map region to center on the discovery location
             self.currentMapRegion = MKCoordinateRegion(
