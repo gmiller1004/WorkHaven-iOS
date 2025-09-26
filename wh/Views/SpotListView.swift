@@ -280,10 +280,65 @@ struct SpotListView: View {
                 .pickerStyle(SegmentedPickerStyle())
                 .accessibilityLabel("Sort by \(sortOption.rawValue) picker")
             }
+            
+            // Category filter row
+            categoryFilterRow
         }
         .padding(.horizontal, ThemeManager.Spacing.md)
         .padding(.vertical, ThemeManager.Spacing.sm)
         .background(ThemeManager.SwiftUIColors.latte)
+    }
+    
+    /**
+     * Horizontal category filter row with toggle buttons
+     */
+    private var categoryFilterRow: some View {
+        HStack {
+            Text("Filter by:")
+                .font(ThemeManager.SwiftUIFonts.caption)
+                .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+            
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: ThemeManager.Spacing.sm) {
+                    CategoryToggleButton(
+                        category: "coffee",
+                        icon: "cup.and.saucer.fill",
+                        label: "Coffee",
+                        isSelected: spotViewModel.selectedCategories.contains("coffee")
+                    ) {
+                        toggleCategory("coffee")
+                    }
+                    
+                    CategoryToggleButton(
+                        category: "park",
+                        icon: "tree.fill",
+                        label: "Park",
+                        isSelected: spotViewModel.selectedCategories.contains("park")
+                    ) {
+                        toggleCategory("park")
+                    }
+                    
+                    CategoryToggleButton(
+                        category: "library",
+                        icon: "book.fill",
+                        label: "Library",
+                        isSelected: spotViewModel.selectedCategories.contains("library")
+                    ) {
+                        toggleCategory("library")
+                    }
+                    
+                    CategoryToggleButton(
+                        category: "coworking",
+                        icon: "deskclock.fill",
+                        label: "Co-working",
+                        isSelected: spotViewModel.selectedCategories.contains("coworking")
+                    ) {
+                        toggleCategory("coworking")
+                    }
+                }
+                .padding(.horizontal, ThemeManager.Spacing.sm)
+            }
+        }
     }
     
     /**
@@ -342,6 +397,64 @@ struct SpotListView: View {
             await spotViewModel.loadSpots(near: locationService.currentLocation ?? CLLocation(latitude: 37.7749, longitude: -122.4194))
         }
         logger.info("SpotListView onAppear - loading spots with @StateObject SpotViewModel")
+    }
+    
+    /**
+     * Toggles a category in the selected categories set
+     * - Parameter category: Category string to toggle
+     */
+    private func toggleCategory(_ category: String) {
+        var newCategories = spotViewModel.selectedCategories
+        if newCategories.contains(category) {
+            newCategories.remove(category)
+        } else {
+            newCategories.insert(category)
+        }
+        spotViewModel.updateCategories(newCategories)
+    }
+}
+
+// MARK: - CategoryToggleButton
+
+/**
+ * Individual category toggle button for filtering
+ */
+struct CategoryToggleButton: View {
+    let category: String
+    let icon: String
+    let label: String
+    let isSelected: Bool
+    let action: () -> Void
+    
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                Image(systemName: icon)
+                    .font(.system(size: 12))
+                    .foregroundColor(isSelected ? ThemeManager.SwiftUIColors.coral : ThemeManager.SwiftUIColors.mocha)
+                
+                Text(label)
+                    .font(.custom("Avenir Next", size: 12))
+                    .fontWeight(.regular)
+                    .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+                
+                if isSelected {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundColor(ThemeManager.SwiftUIColors.coral)
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .background(ThemeManager.SwiftUIColors.latte)
+            .cornerRadius(ThemeManager.CornerRadius.small)
+            .overlay(
+                RoundedRectangle(cornerRadius: ThemeManager.CornerRadius.small)
+                    .stroke(isSelected ? ThemeManager.SwiftUIColors.coral : ThemeManager.SwiftUIColors.mocha.opacity(0.3), lineWidth: 1)
+            )
+        }
+        .accessibilityLabel("\(label) filter, \(isSelected ? "selected" : "not selected")")
+        .accessibilityHint("Tap to \(isSelected ? "deselect" : "select") \(label) filter")
     }
 }
 
