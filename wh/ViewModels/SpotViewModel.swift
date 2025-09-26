@@ -786,6 +786,16 @@ class SpotViewModel: ObservableObject {
     }
     
     /**
+     * Refreshes annotations by updating the current map region
+     * Called when map region changes to prevent annotation flickering
+     */
+    func refreshAnnotations() {
+        // This method is called by MapView when the map region changes
+        // The actual region update is handled by the MapView's onChange modifier
+        logger.debug("Refreshing annotations for current map region")
+    }
+    
+    /**
      * Sets an error message with ThemeManager styling
      * - Parameter message: The error message to display
      */

@@ -219,16 +219,19 @@ struct SpotDetailView: View {
                 .accessibilityAddTraits(.isHeader)
             
             Button(action: { showingMap = true }) {
-                Map(coordinateRegion: .constant(MKCoordinateRegion(
+                Map(position: .constant(.region(MKCoordinateRegion(
                     center: CLLocationCoordinate2D(latitude: spot.latitude, longitude: spot.longitude),
                     span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
-                )), annotationItems: [MapAnnotationItem(coordinate: CLLocationCoordinate2D(latitude: spot.latitude, longitude: spot.longitude), title: spot.name, subtitle: spot.address, spot: spot)]) { item in
-                    MapAnnotation(coordinate: item.coordinate) {
+                )))) {
+                    Annotation(
+                        spot.name,
+                        coordinate: CLLocationCoordinate2D(latitude: spot.latitude, longitude: spot.longitude)
+                    ) {
                         VStack {
                             Image(systemName: "mappin.circle.fill")
                                 .foregroundColor(ThemeManager.SwiftUIColors.coral)
                                 .font(.title)
-                            Text(item.title)
+                            Text(spot.name)
                                 .font(.caption)
                                 .foregroundColor(ThemeManager.SwiftUIColors.mocha)
                                 .padding(.horizontal, 4)
@@ -513,16 +516,19 @@ struct SpotDetailView: View {
     
     private var mapView: some View {
         NavigationView {
-            Map(coordinateRegion: .constant(MKCoordinateRegion(
+            Map(position: .constant(.region(MKCoordinateRegion(
                 center: CLLocationCoordinate2D(latitude: spot.latitude, longitude: spot.longitude),
                 span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
-            )), annotationItems: [MapAnnotationItem(coordinate: CLLocationCoordinate2D(latitude: spot.latitude, longitude: spot.longitude), title: spot.name, subtitle: spot.address, spot: spot)]) { item in
-                MapAnnotation(coordinate: item.coordinate) {
+            )))) {
+                Annotation(
+                    spot.name,
+                    coordinate: CLLocationCoordinate2D(latitude: spot.latitude, longitude: spot.longitude)
+                ) {
                     VStack {
                         Image(systemName: "mappin.circle.fill")
                             .foregroundColor(ThemeManager.SwiftUIColors.coral)
                             .font(.title)
-                        Text(item.title)
+                        Text(spot.name)
                             .font(.caption)
                             .foregroundColor(ThemeManager.SwiftUIColors.mocha)
                             .padding(.horizontal, 4)
