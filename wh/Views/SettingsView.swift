@@ -470,7 +470,7 @@ struct SettingsView: View {
                     
                     Spacer()
                     
-                    Text("1.0.0")
+                    Text(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "Unknown")
                         .font(ThemeManager.SwiftUIFonts.caption)
                         .foregroundColor(ThemeManager.SwiftUIColors.mocha.opacity(0.7))
                 }
@@ -482,7 +482,7 @@ struct SettingsView: View {
                     
                     Spacer()
                     
-                    Text("1")
+                    Text(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "Unknown")
                         .font(ThemeManager.SwiftUIFonts.caption)
                         .foregroundColor(ThemeManager.SwiftUIColors.mocha.opacity(0.7))
                 }
