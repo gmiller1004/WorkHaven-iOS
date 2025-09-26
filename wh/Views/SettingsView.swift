@@ -22,8 +22,11 @@ struct SettingsView: View {
     
     @AppStorage("AutoDiscoverSpots") private var autoDiscoverSpots: Bool = true
     @AppStorage("usesImperialUnits") private var usesImperialUnits: Bool = true
+    @AppStorage("NearbyAlertsEnabled") private var nearbyAlertsEnabled: Bool = false
+    @AppStorage("CommunityUpdatesEnabled") private var communityUpdatesEnabled: Bool = false
     @StateObject private var locationService = LocationService.shared
     @StateObject private var spotViewModel = SpotViewModel()
+    @StateObject private var notificationManager = NotificationManager.shared
     
     @State private var showingResetAlert = false
     @State private var isResettingData = false
@@ -95,6 +98,9 @@ struct SettingsView: View {
                 
                 // Distance Units Section
                 distanceUnitsSection
+                
+                // Notifications Section
+                notificationsSection
                 
                 // Manual Actions Section
                 manualActionsSection
@@ -203,6 +209,89 @@ struct SettingsView: View {
         }
     }
     
+    // MARK: - Notifications Section
+    
+    private var notificationsSection: some View {
+        VStack(alignment: .leading, spacing: ThemeManager.Spacing.md) {
+            Text("Notifications")
+                .font(ThemeManager.SwiftUIFonts.headline)
+                .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+            
+            VStack(spacing: ThemeManager.Spacing.sm) {
+                // Nearby Spot Alerts Toggle
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Nearby Spot Alerts")
+                            .font(ThemeManager.SwiftUIFonts.body)
+                            .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+                        
+                        Text("Get alerts when near high-rated spots (requires always location)")
+                            .font(ThemeManager.SwiftUIFonts.caption)
+                            .foregroundColor(ThemeManager.SwiftUIColors.mocha.opacity(0.7))
+                            .multilineTextAlignment(.leading)
+                    }
+                    
+                    Spacer()
+                    
+                    Toggle("", isOn: $nearbyAlertsEnabled)
+                        .tint(ThemeManager.SwiftUIColors.mocha)
+                        .accessibilityLabel("Nearby Spot Alerts toggle")
+                        .onChange(of: nearbyAlertsEnabled) { newValue in
+                            handleNearbyAlertsToggle(newValue)
+                        }
+                }
+                .padding(ThemeManager.Spacing.md)
+                .background(
+                    RoundedRectangle(cornerRadius: ThemeManager.CornerRadius.medium)
+                        .fill(Color.white)
+                        .shadow(
+                            color: ThemeManager.SwiftUIColors.mocha.opacity(0.1),
+                            radius: 2,
+                            x: 0,
+                            y: 1
+                        )
+                )
+                
+                // Community Updates Toggle
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Community Updates")
+                            .font(ThemeManager.SwiftUIFonts.body)
+                            .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+                        
+                        Text("Get updates on your favorited spots (new ratings, photos, tips)")
+                            .font(ThemeManager.SwiftUIFonts.caption)
+                            .foregroundColor(ThemeManager.SwiftUIColors.mocha.opacity(0.7))
+                            .multilineTextAlignment(.leading)
+                    }
+                    
+                    Spacer()
+                    
+                    Toggle("", isOn: $communityUpdatesEnabled)
+                        .tint(ThemeManager.SwiftUIColors.mocha)
+                        .accessibilityLabel("Community Updates toggle")
+                        .onChange(of: communityUpdatesEnabled) { newValue in
+                            handleCommunityUpdatesToggle(newValue)
+                        }
+                }
+                .padding(ThemeManager.Spacing.md)
+                .background(
+                    RoundedRectangle(cornerRadius: ThemeManager.CornerRadius.medium)
+                        .fill(Color.white)
+                        .shadow(
+                            color: ThemeManager.SwiftUIColors.mocha.opacity(0.1),
+                            radius: 2,
+                            x: 0,
+                            y: 1
+                        )
+                )
+                
+                // Notification Permission Status
+                notificationPermissionStatus
+            }
+        }
+    }
+    
     // MARK: - Location Permission Status
     
     private var locationPermissionStatus: some View {
@@ -211,6 +300,22 @@ struct SettingsView: View {
                 .foregroundColor(locationService.isAuthorized ? .green : .orange)
             
             Text(locationService.isAuthorized ? "Location access granted" : "Location access required")
+                .font(ThemeManager.SwiftUIFonts.caption)
+                .foregroundColor(ThemeManager.SwiftUIColors.mocha.opacity(0.7))
+            
+            Spacer()
+        }
+        .padding(.horizontal, ThemeManager.Spacing.md)
+    }
+    
+    // MARK: - Notification Permission Status
+    
+    private var notificationPermissionStatus: some View {
+        HStack {
+            Image(systemName: notificationManager.isAuthorized ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                .foregroundColor(notificationManager.isAuthorized ? .green : .orange)
+            
+            Text(notificationManager.isAuthorized ? "Notification permissions granted" : "Notification permissions required")
                 .font(ThemeManager.SwiftUIFonts.caption)
                 .foregroundColor(ThemeManager.SwiftUIColors.mocha.opacity(0.7))
             
@@ -371,6 +476,60 @@ struct SettingsView: View {
     }
     
     /**
+     * Handles nearby alerts toggle changes
+     */
+    private func handleNearbyAlertsToggle(_ enabled: Bool) {
+        if enabled {
+            // Request notification permissions first
+            notificationManager.requestAuthorization { granted in
+                Task { @MainActor in
+                    if granted {
+                        // Schedule notifications for favorited spots
+                        await self.scheduleNotificationsForFavoritedSpots()
+                        self.logger.info("Nearby alerts enabled and scheduled")
+                    } else {
+                        self.logger.warning("Notification permission denied, disabling nearby alerts")
+                        self.nearbyAlertsEnabled = false
+                        self.errorMessage = "Notification permissions are required for nearby alerts"
+                        self.showingError = true
+                    }
+                }
+            }
+        } else {
+            // Cancel all nearby alerts when disabled
+            cancelAllNearbyAlerts()
+            logger.info("Nearby alerts disabled")
+        }
+    }
+    
+    /**
+     * Handles community updates toggle changes
+     */
+    private func handleCommunityUpdatesToggle(_ enabled: Bool) {
+        if enabled {
+            // Request notification permissions first
+            notificationManager.requestAuthorization { granted in
+                Task { @MainActor in
+                    if granted {
+                        // Subscribe to CloudKit updates for favorited spots
+                        await self.subscribeToCommunityUpdatesForFavoritedSpots()
+                        self.logger.info("Community updates enabled and subscribed")
+                    } else {
+                        self.logger.warning("Notification permission denied, disabling community updates")
+                        self.communityUpdatesEnabled = false
+                        self.errorMessage = "Notification permissions are required for community updates"
+                        self.showingError = true
+                    }
+                }
+            }
+        } else {
+            // Unsubscribe from all community updates when disabled
+            unsubscribeFromAllCommunityUpdates()
+            logger.info("Community updates disabled")
+        }
+    }
+    
+    /**
      * Regenerates spots using current location
      */
     private func regenerateSpots() async {
@@ -439,6 +598,96 @@ struct SettingsView: View {
         // Note: This is a simplified implementation for demo purposes
         // In a production app, you would implement proper CloudKit deletion
         logger.info("CloudKit reset completed (simplified implementation)")
+    }
+    
+    /**
+     * Schedules notifications for all favorited spots
+     */
+    private func scheduleNotificationsForFavoritedSpots() async {
+        let context = PersistenceController.shared.container.viewContext
+        
+        do {
+            let request = NSFetchRequest<Spot>(entityName: "Spot")
+            request.predicate = NSPredicate(format: "favorites.@count > 0")
+            let favoritedSpots = try context.fetch(request)
+            
+            for spot in favoritedSpots {
+                // Schedule nearby alert for each favorited spot
+                notificationManager.scheduleNearbyAlert(for: spot)
+                logger.debug("Scheduled nearby alert for favorited spot: \(spot.name)")
+            }
+            
+            logger.info("Scheduled notifications for \(favoritedSpots.count) favorited spots")
+            
+        } catch {
+            logger.error("Failed to fetch favorited spots: \(error.localizedDescription)")
+        }
+    }
+    
+    /**
+     * Cancels all nearby alerts
+     */
+    private func cancelAllNearbyAlerts() {
+        let context = PersistenceController.shared.container.viewContext
+        
+        do {
+            let request = NSFetchRequest<Spot>(entityName: "Spot")
+            let allSpots = try context.fetch(request)
+            
+            for spot in allSpots {
+                notificationManager.cancelNearbyAlert(for: spot)
+            }
+            
+            logger.info("Cancelled nearby alerts for all spots")
+            
+        } catch {
+            logger.error("Failed to fetch spots for cancellation: \(error.localizedDescription)")
+        }
+    }
+    
+    /**
+     * Subscribes to community updates for all favorited spots
+     */
+    private func subscribeToCommunityUpdatesForFavoritedSpots() async {
+        let context = PersistenceController.shared.container.viewContext
+        
+        do {
+            let request = NSFetchRequest<Spot>(entityName: "Spot")
+            request.predicate = NSPredicate(format: "favorites.@count > 0")
+            let favoritedSpots = try context.fetch(request)
+            
+            for spot in favoritedSpots {
+                // Subscribe to CloudKit updates for each favorited spot
+                notificationManager.subscribeToCommunityUpdates(for: spot)
+                logger.debug("Subscribed to community updates for favorited spot: \(spot.name)")
+            }
+            
+            logger.info("Subscribed to community updates for \(favoritedSpots.count) favorited spots")
+            
+        } catch {
+            logger.error("Failed to fetch favorited spots for subscription: \(error.localizedDescription)")
+        }
+    }
+    
+    /**
+     * Unsubscribes from all community updates
+     */
+    private func unsubscribeFromAllCommunityUpdates() {
+        let context = PersistenceController.shared.container.viewContext
+        
+        do {
+            let request = NSFetchRequest<Spot>(entityName: "Spot")
+            let allSpots = try context.fetch(request)
+            
+            for spot in allSpots {
+                notificationManager.unsubscribeFromCommunityUpdates(for: spot)
+            }
+            
+            logger.info("Unsubscribed from community updates for all spots")
+            
+        } catch {
+            logger.error("Failed to fetch spots for unsubscription: \(error.localizedDescription)")
+        }
     }
 }
 
