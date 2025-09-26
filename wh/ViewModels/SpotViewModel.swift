@@ -788,11 +788,11 @@ class SpotViewModel: ObservableObject {
     /**
      * Refreshes annotations by updating the current map region
      * Called when map region changes to prevent annotation flickering
+     * - Parameter mapRegion: The new map region to set
      */
-    func refreshAnnotations() {
-        // This method is called by MapView when the map region changes
-        // The actual region update is handled by the MapView's onChange modifier
-        logger.debug("Refreshing annotations for current map region")
+    func refreshAnnotations(mapRegion: MKCoordinateRegion) {
+        currentMapRegion = mapRegion
+        logger.debug("Refreshing annotations for map region: \(mapRegion.center.latitude), \(mapRegion.center.longitude)")
     }
     
     /**

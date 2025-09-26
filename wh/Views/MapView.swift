@@ -109,7 +109,7 @@ struct MapView: View {
             }
             .onMapCameraChange { context in
                 mapRegion = context.region
-                spotViewModel.refreshAnnotations()
+                spotViewModel.refreshAnnotations(mapRegion: context.region)
             }
             .onChange(of: spotViewModel.errorMessage) { errorMessage in
                 if errorMessage != nil {
