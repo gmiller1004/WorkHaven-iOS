@@ -889,10 +889,34 @@ extension SpotViewModel {
         selectedCategories = newCategories
         logger.info("Updated selected categories: \(self.selectedCategories)")
         
-        // Refilter existing spots
-        let filteredSpots = filterSpotsByCategory(spots)
-        spots = sortSpots(filteredSpots, from: nil)
-        showEmptyState = spots.isEmpty
+        // Refetch all spots from Core Data and then filter by new categories
+        Task {
+            await refilterSpotsWithCurrentCategories()
+        }
+    }
+    
+    /**
+     * Refetches all spots from Core Data and applies current category filter
+     */
+    private func refilterSpotsWithCurrentCategories() async {
+        do {
+            let viewContext = PersistenceController.shared.container.viewContext
+            let request: NSFetchRequest<Spot> = Spot.fetchRequest()
+            let allSpots = try viewContext.fetch(request)
+            
+            await MainActor.run {
+                // Filter spots by selected categories
+                let filteredSpots = self.filterSpotsByCategory(allSpots)
+                self.spots = self.sortSpots(filteredSpots, from: nil)
+                self.showEmptyState = self.spots.isEmpty
+                logger.info("Refiltered spots: \(self.spots.count) spots after category filter")
+            }
+        } catch {
+            await MainActor.run {
+                self.errorMessage = "Failed to refilter spots: \(error.localizedDescription)"
+                logger.error("Failed to refilter spots: \(error)")
+            }
+        }
     }
     
     /**
