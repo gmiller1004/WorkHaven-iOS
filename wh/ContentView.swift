@@ -43,6 +43,11 @@ struct ContentView: View {
     @State private var showingOnboarding = false
     @State private var isRequestingPermissions = false
     
+    // iPad detection
+    private var isIPad: Bool {
+        UIDevice.current.userInterfaceIdiom == .pad
+    }
+    
     // MARK: - Body
     
     var body: some View {
@@ -76,6 +81,12 @@ struct ContentView: View {
         }
         .accentColor(ThemeManager.SwiftUIColors.coral)
         .onAppear {
+            if isIPad {
+                // Apply iPad-specific styling for swipeable tabs
+                UITabBar.appearance().itemPositioning = .centered
+                UITabBar.appearance().itemSpacing = 20
+            }
+            
             if !hasRequestedPermissions {
                 showingOnboarding = true
             } else {
@@ -136,11 +147,8 @@ struct ContentView: View {
     private func loadSpotsIfNeeded() {
         guard !hasPerformedInitialLoad else { return }
         
-        // Only load spots if we have a real location, not fallback
-        guard let location = locationService.currentLocation else {
-            logger.info("No location available, waiting for location service")
-            return
-        }
+        // Use current location or fallback
+        let location = locationService.currentLocation ?? fallbackLocation
         
         logger.info("ContentView initializing spot loading")
         hasPerformedInitialLoad = true
