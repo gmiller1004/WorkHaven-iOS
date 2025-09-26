@@ -156,8 +156,10 @@ struct SpotListView: View {
             }
             .refreshable {
                 Task {
-                    await spotViewModel.loadSpots(near: locationService.currentLocation ?? CLLocation(latitude: 37.7749, longitude: -122.4194))
-                    spotViewModel.viewContext.refreshAllObjects()
+                    if let location = locationService.currentLocation {
+                        await spotViewModel.loadSpots(near: location)
+                        spotViewModel.viewContext.refreshAllObjects()
+                    }
                 }
             }
             .alert("Error", isPresented: $showingError) {
@@ -206,8 +208,10 @@ struct SpotListView: View {
         .background(ThemeManager.SwiftUIColors.latte)
         .refreshable {
             Task {
-                await spotViewModel.loadSpots(near: locationService.currentLocation ?? CLLocation(latitude: 37.7749, longitude: -122.4194))
-                spotViewModel.viewContext.refreshAllObjects()
+                if let location = locationService.currentLocation {
+                    await spotViewModel.loadSpots(near: location)
+                    spotViewModel.viewContext.refreshAllObjects()
+                }
             }
         }
     }
@@ -218,8 +222,10 @@ struct SpotListView: View {
     private var refreshButton: some View {
         Button(action: {
             Task {
-                await spotViewModel.loadSpots(near: locationService.currentLocation ?? CLLocation(latitude: 37.7749, longitude: -122.4194))
-                spotViewModel.viewContext.refreshAllObjects()
+                if let location = locationService.currentLocation {
+                    await spotViewModel.loadSpots(near: location)
+                    spotViewModel.viewContext.refreshAllObjects()
+                }
             }
         }) {
             Image(systemName: "arrow.clockwise")
@@ -397,8 +403,13 @@ struct SpotListView: View {
      * Uses @StateObject SpotViewModel for local state management
      */
     private func loadSpotsIfNeeded() {
+        guard let location = locationService.currentLocation else {
+            logger.info("No location available in SpotListView, waiting for location service")
+            return
+        }
+        
         Task {
-            await spotViewModel.loadSpots(near: locationService.currentLocation ?? CLLocation(latitude: 37.7749, longitude: -122.4194))
+            await spotViewModel.loadSpots(near: location)
         }
         logger.info("SpotListView onAppear - loading spots with @StateObject SpotViewModel")
     }
@@ -410,17 +421,19 @@ struct SpotListView: View {
     private func toggleCategory(_ category: String) {
         var newCategories = spotViewModel.selectedCategories
         if newCategories.contains(category) {
-            // Prevent deselecting the last category to avoid empty filter state
+            // Prevent deselecting if it would result in empty categories
             if newCategories.count > 1 {
                 newCategories.remove(category)
+                spotViewModel.updateCategories(newCategories)
             } else {
                 logger.info("Cannot deselect last category to prevent empty filter state")
+                // Don't update categories, just return
                 return
             }
         } else {
             newCategories.insert(category)
+            spotViewModel.updateCategories(newCategories)
         }
-        spotViewModel.updateCategories(newCategories)
     }
 }
 
