@@ -175,6 +175,12 @@ struct SpotListView: View {
             .onAppear {
                 loadSpotsIfNeeded()
             }
+            .onChange(of: locationService.currentLocation) { location in
+                if location != nil {
+                    logger.info("Location became available in SpotListView, loading spots")
+                    loadSpotsIfNeeded()
+                }
+            }
             .onChange(of: spotViewModel.errorMessage) { errorMessage in
                 if errorMessage != nil {
                     showingError = true
