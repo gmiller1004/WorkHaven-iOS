@@ -41,6 +41,9 @@ class SpotViewModel: ObservableObject {
     /// Indicates if empty state should be shown (no spots found)
     @Published var showEmptyState: Bool = false
     
+    /// Selected categories for filtering spots (all default selected)
+    @Published var selectedCategories: Set<String> = ["coffee", "park", "library", "coworking"]
+    
     /// Core Data view context for UI operations
     var viewContext: NSManagedObjectContext {
         return persistenceController.container.viewContext
@@ -115,7 +118,9 @@ class SpotViewModel: ObservableObject {
                 viewContext.refreshAllObjects()
                 
                 await MainActor.run {
-                    self.spots = self.sortSpots(existingSpots, from: near)
+                    // Filter spots by selected categories
+                    let filteredSpots = self.filterSpotsByCategory(existingSpots)
+                    self.spots = self.sortSpots(filteredSpots, from: near)
                     self.isSeeding = false
                     self.showEmptyState = self.spots.isEmpty
                     
@@ -228,8 +233,9 @@ class SpotViewModel: ObservableObject {
                 // Combine existing and newly discovered spots
                 let allSpots = existingSpots + deduplicatedSpots
                 
-                // Sort by distance from center then by overall rating
-                let sortedSpots = sortSpots(allSpots, from: centerLocation)
+                // Filter spots by selected categories and sort by distance from center then by overall rating
+                let filteredSpots = filterSpotsByCategory(allSpots)
+                let sortedSpots = sortSpots(filteredSpots, from: centerLocation)
                 
                 // Refresh Core Data context to ensure latest data
                 let viewContext = PersistenceController.shared.container.viewContext
@@ -254,8 +260,9 @@ class SpotViewModel: ObservableObject {
             } else {
                 logger.info("Sufficient spots found, using existing spots")
                 
-                // Sort existing spots by distance from center then by overall rating
-                let sortedSpots = sortSpots(existingSpots, from: centerLocation)
+                // Filter spots by selected categories and sort existing spots by distance from center then by overall rating
+                let filteredSpots = filterSpotsByCategory(existingSpots)
+                let sortedSpots = sortSpots(filteredSpots, from: centerLocation)
                 
                 // Refresh Core Data context to ensure latest data
                 let viewContext = PersistenceController.shared.container.viewContext
@@ -527,8 +534,9 @@ class SpotViewModel: ObservableObject {
         // Cancel progress monitoring
         progressTask.cancel()
         
-        // Sort spots by distance and rating
-        let sortedSpots = sortSpots(discoveredSpots, from: near)
+        // Filter spots by selected categories and sort by distance and rating
+        let filteredSpots = filterSpotsByCategory(discoveredSpots)
+        let sortedSpots = sortSpots(filteredSpots, from: near)
         
         // Refresh Core Data context to ensure latest data
         let viewContext = PersistenceController.shared.container.viewContext
@@ -871,6 +879,33 @@ extension SpotViewModel {
         - Overall: \(String(format: "%.2f", overallRating))
         - User Ratings Count: \(self.getUserRatingCount(for: spot))
         """)
+    }
+    
+    /**
+     * Updates selected categories and refilters spots
+     * - Parameter newCategories: Set of category strings to filter by
+     */
+    func updateCategories(_ newCategories: Set<String>) {
+        selectedCategories = newCategories
+        logger.info("Updated selected categories: \(self.selectedCategories)")
+        
+        // Refilter existing spots
+        let filteredSpots = filterSpotsByCategory(spots)
+        spots = sortSpots(filteredSpots, from: nil)
+        showEmptyState = spots.isEmpty
+    }
+    
+    /**
+     * Filters spots by selected categories
+     * - Parameter spots: Array of spots to filter
+     * - Returns: Filtered array of spots matching selected categories
+     */
+    private func filterSpotsByCategory(_ spots: [Spot]) -> [Spot] {
+        return spots.filter { spot in
+            // Include spots with type in selectedCategories or "unknown" if not set
+            let spotType = spot.type.isEmpty ? "unknown" : spot.type
+            return selectedCategories.contains(spotType)
+        }
     }
 }
 #endif// Test comment
