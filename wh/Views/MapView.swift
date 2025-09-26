@@ -30,6 +30,11 @@ struct MapView: View {
     
     private let logger = Logger(subsystem: "com.nextsizzle.wh", category: "MapView")
     
+    // iPad detection
+    private var isIPad: Bool {
+        UIDevice.current.userInterfaceIdiom == .pad
+    }
+    
     // MARK: - Initialization
     
     init(spotViewModel: SpotViewModel) {
@@ -258,11 +263,11 @@ struct MapView: View {
                     .font(.system(size: 16, weight: .medium))
                 
                 Text("Search Here")
-                    .font(ThemeManager.SwiftUIFonts.body)
+                    .font(isIPad ? .system(size: 18, weight: .medium) : ThemeManager.SwiftUIFonts.body)
                     .fontWeight(.medium)
             }
             .foregroundColor(ThemeManager.SwiftUIColors.coral)
-            .padding(.horizontal, ThemeManager.Spacing.md)
+            .padding(.horizontal, isIPad ? 20 : ThemeManager.Spacing.md)
             .padding(.vertical, ThemeManager.Spacing.sm)
             .background(
                 RoundedRectangle(cornerRadius: ThemeManager.CornerRadius.medium)
