@@ -79,7 +79,12 @@ struct ContentView: View {
             if !hasRequestedPermissions {
                 showingOnboarding = true
             } else {
-                loadSpotsIfNeeded()
+                // Wait for location before loading spots to avoid San Francisco fallback
+                if locationService.currentLocation != nil {
+                    loadSpotsIfNeeded()
+                } else {
+                    logger.info("Waiting for location before loading spots")
+                }
             }
         }
         .onChange(of: locationService.currentLocation) { newLocation in
@@ -116,7 +121,8 @@ struct ContentView: View {
                     hasRequestedPermissions = true
                     UserDefaults.standard.set(true, forKey: "HasRequestedPermissions")
                     showingOnboarding = false
-                    loadSpotsIfNeeded()
+                    // Don't load spots immediately - wait for location update
+                    logger.info("Permissions granted, waiting for location update")
                 }
             )
         }
@@ -130,14 +136,17 @@ struct ContentView: View {
     private func loadSpotsIfNeeded() {
         guard !hasPerformedInitialLoad else { return }
         
+        // Only load spots if we have a real location, not fallback
+        guard let location = locationService.currentLocation else {
+            logger.info("No location available, waiting for location service")
+            return
+        }
+        
         logger.info("ContentView initializing spot loading")
         hasPerformedInitialLoad = true
         
-        // Use current location or fallback
-        let locationToUse = locationService.currentLocation ?? fallbackLocation
-        
         Task {
-            await spotViewModel.loadSpots(near: locationToUse)
+            await spotViewModel.loadSpots(near: location)
         }
     }
 }

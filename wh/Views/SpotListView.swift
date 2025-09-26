@@ -304,7 +304,8 @@ struct SpotListView: View {
                         category: "coffee",
                         icon: "cup.and.saucer.fill",
                         label: "Coffee",
-                        isSelected: spotViewModel.selectedCategories.contains("coffee")
+                        isSelected: spotViewModel.selectedCategories.contains("coffee"),
+                        isLastSelected: spotViewModel.selectedCategories.count == 1 && spotViewModel.selectedCategories.contains("coffee")
                     ) {
                         toggleCategory("coffee")
                     }
@@ -313,7 +314,8 @@ struct SpotListView: View {
                         category: "park",
                         icon: "tree.fill",
                         label: "Park",
-                        isSelected: spotViewModel.selectedCategories.contains("park")
+                        isSelected: spotViewModel.selectedCategories.contains("park"),
+                        isLastSelected: spotViewModel.selectedCategories.count == 1 && spotViewModel.selectedCategories.contains("park")
                     ) {
                         toggleCategory("park")
                     }
@@ -322,7 +324,8 @@ struct SpotListView: View {
                         category: "library",
                         icon: "book.fill",
                         label: "Library",
-                        isSelected: spotViewModel.selectedCategories.contains("library")
+                        isSelected: spotViewModel.selectedCategories.contains("library"),
+                        isLastSelected: spotViewModel.selectedCategories.count == 1 && spotViewModel.selectedCategories.contains("library")
                     ) {
                         toggleCategory("library")
                     }
@@ -331,7 +334,8 @@ struct SpotListView: View {
                         category: "coworking",
                         icon: "deskclock.fill",
                         label: "Co-working",
-                        isSelected: spotViewModel.selectedCategories.contains("coworking")
+                        isSelected: spotViewModel.selectedCategories.contains("coworking"),
+                        isLastSelected: spotViewModel.selectedCategories.count == 1 && spotViewModel.selectedCategories.contains("coworking")
                     ) {
                         toggleCategory("coworking")
                     }
@@ -406,7 +410,13 @@ struct SpotListView: View {
     private func toggleCategory(_ category: String) {
         var newCategories = spotViewModel.selectedCategories
         if newCategories.contains(category) {
-            newCategories.remove(category)
+            // Prevent deselecting the last category to avoid empty filter state
+            if newCategories.count > 1 {
+                newCategories.remove(category)
+            } else {
+                logger.info("Cannot deselect last category to prevent empty filter state")
+                return
+            }
         } else {
             newCategories.insert(category)
         }
@@ -424,6 +434,7 @@ struct CategoryToggleButton: View {
     let icon: String
     let label: String
     let isSelected: Bool
+    let isLastSelected: Bool
     let action: () -> Void
     
     var body: some View {
@@ -443,6 +454,12 @@ struct CategoryToggleButton: View {
                         .font(.system(size: 10, weight: .bold))
                         .foregroundColor(ThemeManager.SwiftUIColors.coral)
                 }
+                
+                if isLastSelected {
+                    Image(systemName: "lock.fill")
+                        .font(.system(size: 8))
+                        .foregroundColor(ThemeManager.SwiftUIColors.mocha.opacity(0.6))
+                }
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 6)
@@ -453,8 +470,10 @@ struct CategoryToggleButton: View {
                     .stroke(isSelected ? ThemeManager.SwiftUIColors.coral : ThemeManager.SwiftUIColors.mocha.opacity(0.3), lineWidth: 1)
             )
         }
-        .accessibilityLabel("\(label) filter, \(isSelected ? "selected" : "not selected")")
-        .accessibilityHint("Tap to \(isSelected ? "deselect" : "select") \(label) filter")
+        .disabled(isLastSelected)
+        .opacity(isLastSelected ? 0.7 : 1.0)
+        .accessibilityLabel("\(label) filter, \(isSelected ? "selected" : "not selected")\(isLastSelected ? ", cannot be deselected" : "")")
+        .accessibilityHint(isLastSelected ? "This is the last selected filter and cannot be deselected" : "Tap to \(isSelected ? "deselect" : "select") \(label) filter")
     }
 }
 
