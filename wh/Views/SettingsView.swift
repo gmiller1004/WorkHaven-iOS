@@ -33,6 +33,10 @@ struct SettingsView: View {
     @State private var showingError = false
     @State private var errorMessage = ""
     
+    // Privacy compliance states
+    @State private var showDeleteConfirmation = false
+    @State private var showDeleteSuccess = false
+    
     private let logger = Logger(subsystem: "com.nextsizzle.wh", category: "SettingsView")
     
     // MARK: - Body
@@ -82,6 +86,29 @@ struct SettingsView: View {
             } message: {
                 Text(errorMessage)
             }
+            .alert("Delete My Data", isPresented: $showDeleteConfirmation) {
+                Button("Cancel", role: .cancel) {
+                    showDeleteConfirmation = false
+                }
+                .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+                
+                Button("Delete", role: .destructive) {
+                    Task {
+                        await deleteUserData()
+                    }
+                }
+                .foregroundColor(.red)
+            } message: {
+                Text("This will permanently delete all your favorites, ratings, tips, and photos across devices. This action cannot be reversed. Continue?")
+            }
+            .alert("Data Deleted", isPresented: $showDeleteSuccess) {
+                Button("OK", role: .cancel) {
+                    showDeleteSuccess = false
+                }
+                .foregroundColor(ThemeManager.SwiftUIColors.coral)
+            } message: {
+                Text("Your data has been permanently deleted. Thank you for using WorkHaven.")
+            }
             .onAppear {
                 initializeDistanceUnits()
             }
@@ -105,7 +132,10 @@ struct SettingsView: View {
                 // Manual Actions Section
                 manualActionsSection
                 
-                #if DEBUG
+                // Privacy Section
+                privacySection
+                
+                #if targetEnvironment(simulator)
                 // Debug Section
                 debugSection
                 #endif
@@ -358,7 +388,39 @@ struct SettingsView: View {
         }
     }
     
-    #if DEBUG
+    // MARK: - Privacy Section
+    
+    private var privacySection: some View {
+        VStack(alignment: .leading, spacing: ThemeManager.Spacing.md) {
+            Text("Privacy")
+                .font(ThemeManager.SwiftUIFonts.headline)
+                .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+            
+            VStack(spacing: ThemeManager.Spacing.sm) {
+                // Delete My Data Button
+                Button(action: {
+                    showDeleteConfirmation = true
+                }) {
+                    HStack {
+                        Image(systemName: "trash.fill")
+                        Text("Delete My Data")
+                    }
+                    .font(.custom("Avenir Next Medium", size: 16))
+                    .foregroundColor(.red)
+                    .frame(maxWidth: .infinity)
+                    .padding(ThemeManager.Spacing.sm)
+                    .background(
+                        RoundedRectangle(cornerRadius: ThemeManager.CornerRadius.medium)
+                            .fill(Color(hex: "#FFF8E7"))
+                    )
+                }
+                .accessibilityLabel("Delete My Data button, destructive action")
+                .accessibilityHint("Tap to permanently delete all your personal data including favorites, ratings, tips, and photos")
+            }
+        }
+    }
+    
+    #if targetEnvironment(simulator)
     // MARK: - Debug Section
     
     private var debugSection: some View {
@@ -440,6 +502,54 @@ struct SettingsView: View {
     }
     
     // MARK: - Methods
+    
+    /**
+     * Deletes all user-specific data for privacy compliance
+     */
+    private func deleteUserData() async {
+        let context = PersistenceController.shared.container.viewContext
+        
+        do {
+            // Delete UserRating entities
+            let userRatingRequest = NSFetchRequest<NSFetchRequestResult>(entityName: "UserRating")
+            let userRatingDeleteRequest = NSBatchDeleteRequest(fetchRequest: userRatingRequest)
+            try context.execute(userRatingDeleteRequest)
+            
+            // Delete UserTip entities
+            let userTipRequest = NSFetchRequest<NSFetchRequestResult>(entityName: "UserTip")
+            let userTipDeleteRequest = NSBatchDeleteRequest(fetchRequest: userTipRequest)
+            try context.execute(userTipDeleteRequest)
+            
+            // Delete UserFavorite entities
+            let userFavoriteRequest = NSFetchRequest<NSFetchRequestResult>(entityName: "UserFavorite")
+            let userFavoriteDeleteRequest = NSBatchDeleteRequest(fetchRequest: userFavoriteRequest)
+            try context.execute(userFavoriteDeleteRequest)
+            
+            // Delete Photo entities
+            let photoRequest = NSFetchRequest<NSFetchRequestResult>(entityName: "Photo")
+            let photoDeleteRequest = NSBatchDeleteRequest(fetchRequest: photoRequest)
+            try context.execute(photoDeleteRequest)
+            
+            // Save context to trigger CloudKit sync
+            try context.save()
+            
+            logger.info("Successfully deleted all user data for privacy compliance")
+            
+            // Show success alert
+            await MainActor.run {
+                showDeleteSuccess = true
+                showDeleteConfirmation = false
+            }
+            
+        } catch {
+            logger.error("Failed to delete user data: \(error.localizedDescription)")
+            await MainActor.run {
+                errorMessage = "Failed to delete data: \(error.localizedDescription)"
+                showingError = true
+                showDeleteConfirmation = false
+            }
+        }
+    }
     
     /**
      * Initializes distance units based on user's locale
@@ -690,7 +800,6 @@ struct SettingsView: View {
         }
     }
 }
-
 
 // MARK: - Preview
 
