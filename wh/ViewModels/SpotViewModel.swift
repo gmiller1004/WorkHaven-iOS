@@ -41,6 +41,11 @@ class SpotViewModel: ObservableObject {
     /// Indicates if empty state should be shown (no spots found)
     @Published var showEmptyState: Bool = false
     
+    /// Core Data view context for UI operations
+    var viewContext: NSManagedObjectContext {
+        return persistenceController.container.viewContext
+    }
+    
     // MARK: - Private Properties
     
     private let persistenceController: PersistenceController

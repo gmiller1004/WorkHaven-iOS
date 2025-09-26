@@ -20,7 +20,7 @@ struct SpotListView: View {
     
     // MARK: - Properties
     
-    @ObservedObject var spotViewModel: SpotViewModel
+    @StateObject private var spotViewModel = SpotViewModel()
     @ObservedObject private var locationService = LocationService.shared
     @AppStorage("usesImperialUnits") private var usesImperialUnits: Bool = true
     @State private var showingError = false
@@ -57,7 +57,7 @@ struct SpotListView: View {
     /**
      * Sorted spots based on selected sort option
      */
-    private var sortedSpots: [Spot] {
+    private var filteredAndSortedSpots: [Spot] {
         let fallbackLocation = CLLocation(latitude: 37.7749, longitude: -122.4194)
         let userLocation = locationService.currentLocation ?? fallbackLocation
         
@@ -76,9 +76,8 @@ struct SpotListView: View {
             }
         case .rating:
             return filteredSpots.sorted { spot1, spot2 in
-                let tempViewModel = SpotViewModel()
-                let rating1 = tempViewModel.calculateOverallRating(for: spot1)
-                let rating2 = tempViewModel.calculateOverallRating(for: spot2)
+                let rating1 = spotViewModel.calculateOverallRating(for: spot1)
+                let rating2 = spotViewModel.calculateOverallRating(for: spot2)
                 return rating1 > rating2
             }
         case .name:
@@ -91,11 +90,11 @@ struct SpotListView: View {
     // MARK: - Initialization
     
     /**
-     * Initializes SpotListView with shared SpotViewModel instance
-     * Uses @ObservedObject for shared state management
+     * Initializes SpotListView with @StateObject SpotViewModel
+     * Uses @StateObject for local state management
      */
-    init(spotViewModel: SpotViewModel) {
-        self.spotViewModel = spotViewModel
+    init() {
+        // @StateObject is initialized automatically
     }
     
     // MARK: - Body
@@ -131,10 +130,10 @@ struct SpotListView: View {
                                 y: 2
                             )
                     )
-                } else if spotViewModel.spots.isEmpty {
-                    // Empty state
+                } else if spotViewModel.showEmptyState {
+                    // Empty state with scroll to refresh
                     emptyStateView
-                } else if sortedSpots.isEmpty {
+                } else if filteredAndSortedSpots.isEmpty {
                     // No search results
                     noSearchResultsView
                 } else {
@@ -156,7 +155,10 @@ struct SpotListView: View {
                 }
             }
             .refreshable {
-                await refreshSpots()
+                Task {
+                    await spotViewModel.loadSpots(near: locationService.currentLocation ?? CLLocation(latitude: 37.7749, longitude: -122.4194))
+                    spotViewModel.viewContext.refreshAllObjects()
+                }
             }
             .alert("Error", isPresented: $showingError) {
                 Button("OK", role: .cancel) {
@@ -171,6 +173,11 @@ struct SpotListView: View {
             .onAppear {
                 loadSpotsIfNeeded()
             }
+            .onChange(of: spotViewModel.errorMessage) { errorMessage in
+                if errorMessage != nil {
+                    showingError = true
+                }
+            }
         }
     }
     
@@ -181,8 +188,8 @@ struct SpotListView: View {
      */
     private var spotsList: some View {
         List {
-            ForEach(sortedSpots, id: \.objectID) { spot in
-                        NavigationLink(destination: SpotDetailView(spot: spot, locationService: locationService)) {
+            ForEach(filteredAndSortedSpots, id: \.objectID) { spot in
+                NavigationLink(destination: SpotDetailView(spot: spot, locationService: locationService)) {
                     SpotListRowView(spot: spot, userLocation: locationService.currentLocation, usesImperialUnits: usesImperialUnits)
                 }
                 .listRowBackground(ThemeManager.SwiftUIColors.latte)
@@ -198,7 +205,10 @@ struct SpotListView: View {
         .listStyle(PlainListStyle())
         .background(ThemeManager.SwiftUIColors.latte)
         .refreshable {
-            await refreshSpots()
+            Task {
+                await spotViewModel.loadSpots(near: locationService.currentLocation ?? CLLocation(latitude: 37.7749, longitude: -122.4194))
+                spotViewModel.viewContext.refreshAllObjects()
+            }
         }
     }
     
@@ -208,7 +218,8 @@ struct SpotListView: View {
     private var refreshButton: some View {
         Button(action: {
             Task {
-                await refreshSpots()
+                await spotViewModel.loadSpots(near: locationService.currentLocation ?? CLLocation(latitude: 37.7749, longitude: -122.4194))
+                spotViewModel.viewContext.refreshAllObjects()
             }
         }) {
             Image(systemName: "arrow.clockwise")
@@ -280,22 +291,16 @@ struct SpotListView: View {
      */
     private var emptyStateView: some View {
         VStack(spacing: ThemeManager.Spacing.md) {
-            Image(systemName: "location.magnifyingglass")
-                .font(.system(size: 48))
-                .foregroundColor(ThemeManager.SwiftUIColors.mocha.opacity(0.6))
-            
-            Text("No work spots found")
+            Text("No spots found, scroll to refresh")
                 .font(ThemeManager.SwiftUIFonts.headline)
                 .foregroundColor(ThemeManager.SwiftUIColors.mocha)
             
-            Text("Pull down to refresh or check your location settings")
-                .font(ThemeManager.SwiftUIFonts.body)
-                .foregroundColor(ThemeManager.SwiftUIColors.mocha.opacity(0.7))
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, ThemeManager.Spacing.md)
+            ProgressView()
+                .scaleEffect(1.2)
+                .tint(ThemeManager.SwiftUIColors.latte)
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("No work spots found. Pull down to refresh or check your location settings")
+        .accessibilityLabel("No spots found, scroll to refresh")
     }
     
     /**
@@ -330,28 +335,13 @@ struct SpotListView: View {
     
     /**
      * Loads spots if user location is available
-     * Note: ContentView handles initial spot loading with shared SpotViewModel
+     * Uses @StateObject SpotViewModel for local state management
      */
     private func loadSpotsIfNeeded() {
-        // ContentView handles spot loading with the shared SpotViewModel
-        logger.info("SpotListView onAppear - spots will be loaded by ContentView")
-    }
-    
-    /**
-     * Refreshes spots with current user location
-     */
-    private func refreshSpots() async {
-        guard let location = locationService.currentLocation else {
-            logger.warning("Cannot refresh spots: no user location")
-            return
+        Task {
+            await spotViewModel.loadSpots(near: locationService.currentLocation ?? CLLocation(latitude: 37.7749, longitude: -122.4194))
         }
-        
-        await spotViewModel.refreshSpots(near: location)
-        
-        // Show error alert if needed
-        if spotViewModel.errorMessage != nil {
-            showingError = true
-        }
+        logger.info("SpotListView onAppear - loading spots with @StateObject SpotViewModel")
     }
 }
 
@@ -695,6 +685,6 @@ struct SteamLine: View {
 // MARK: - Preview
 
 #Preview {
-    SpotListView(spotViewModel: SpotViewModel())
+    SpotListView()
         .environment(\.managedObjectContext, PersistenceController.preview.container.viewContext)
 }

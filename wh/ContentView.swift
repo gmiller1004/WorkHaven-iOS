@@ -48,7 +48,7 @@ struct ContentView: View {
     var body: some View {
         TabView {
             // MARK: - List Tab
-            SpotListView(spotViewModel: spotViewModel)
+            SpotListView()
                 .environment(\.managedObjectContext, viewContext)
                 .tabItem {
                     Label("List", systemImage: "list.bullet")
