@@ -119,7 +119,7 @@ class SpotViewModel: ObservableObject {
                 
                 await MainActor.run {
                     // Filter spots by selected categories
-                    let filteredSpots = self.filterSpotsByCategory(existingSpots)
+                    let filteredSpots = filterSpotsByCategory(existingSpots)
                     self.spots = self.sortSpots(filteredSpots, from: near)
                     self.isSeeding = false
                     self.showEmptyState = self.spots.isEmpty
@@ -325,7 +325,7 @@ class SpotViewModel: ObservableObject {
                 
                 // Log a few sample spots
                 for (index, spot) in totalSpots.prefix(3).enumerated() {
-                    logger.info("DEBUG: Spot \(index + 1): \(spot.name ?? "Unknown") - Last seeded: \(spot.lastSeeded.description)")
+                    logger.info("DEBUG: Spot \(index + 1): \(spot.name) - Last seeded: \(spot.lastSeeded.description)")
                 }
             }
         } catch {
@@ -453,8 +453,8 @@ class SpotViewModel: ObservableObject {
             
             for existingSpot in existingSpots {
                 // Check by address similarity
-                let discoveredAddress = (discoveredSpot.address ?? "").lowercased()
-                let existingAddress = (existingSpot.address ?? "").lowercased()
+                let discoveredAddress = discoveredSpot.address.lowercased()
+                let existingAddress = existingSpot.address.lowercased()
                 
                 if discoveredAddress == existingAddress {
                     isDuplicate = true
@@ -843,6 +843,55 @@ class SpotViewModel: ObservableObject {
         errorMessage = message
         logger.error("SpotViewModel error: \(message)")
     }
+    
+    /**
+     * Filters spots by selected categories
+     * - Parameter spots: Array of spots to filter
+     * - Returns: Filtered array of spots matching selected categories
+     */
+    func filterSpotsByCategory(_ spots: [Spot]) -> [Spot] {
+        return spots.filter { spot in
+            // Include spots with type in selectedCategories or "unknown" if not set
+            let spotType = spot.type.isEmpty ? "unknown" : spot.type
+            return selectedCategories.contains(spotType)
+        }
+    }
+    
+    /**
+     * Updates selected categories and refilters spots
+     * - Parameter newCategories: Set of category strings to filter by
+     */
+    func updateCategories(_ newCategories: Set<String>) async {
+        selectedCategories = newCategories
+        logger.info("Updated selected categories: \(self.selectedCategories)")
+        
+        // Refetch all spots from Core Data and then filter by new categories
+        await refilterSpotsWithCurrentCategories()
+    }
+    
+    /**
+     * Refetches all spots from Core Data and applies current category filter
+     */
+    private func refilterSpotsWithCurrentCategories() async {
+        do {
+            let viewContext = PersistenceController.shared.container.viewContext
+            let request: NSFetchRequest<Spot> = Spot.fetchRequest()
+            let allSpots = try viewContext.fetch(request)
+            
+            await MainActor.run {
+                // Filter spots by selected categories
+                let filteredSpots = filterSpotsByCategory(allSpots)
+                self.spots = self.sortSpots(filteredSpots, from: nil)
+                self.showEmptyState = self.spots.isEmpty
+                logger.info("Refiltered spots: \(self.spots.count) spots after category filter")
+            }
+        } catch {
+            await MainActor.run {
+                self.errorMessage = "Failed to refilter spots: \(error.localizedDescription)"
+                logger.error("Failed to refilter spots: \(error)")
+            }
+        }
+    }
 }
 
 // MARK: - Debug Helpers
@@ -881,55 +930,5 @@ extension SpotViewModel {
         """)
     }
     
-    /**
-     * Updates selected categories and refilters spots
-     * - Parameter newCategories: Set of category strings to filter by
-     */
-    func updateCategories(_ newCategories: Set<String>) {
-        selectedCategories = newCategories
-        logger.info("Updated selected categories: \(self.selectedCategories)")
-        
-        // Refetch all spots from Core Data and then filter by new categories
-        Task {
-            await refilterSpotsWithCurrentCategories()
-        }
-    }
-    
-    /**
-     * Refetches all spots from Core Data and applies current category filter
-     */
-    private func refilterSpotsWithCurrentCategories() async {
-        do {
-            let viewContext = PersistenceController.shared.container.viewContext
-            let request: NSFetchRequest<Spot> = Spot.fetchRequest()
-            let allSpots = try viewContext.fetch(request)
-            
-            await MainActor.run {
-                // Filter spots by selected categories
-                let filteredSpots = self.filterSpotsByCategory(allSpots)
-                self.spots = self.sortSpots(filteredSpots, from: nil)
-                self.showEmptyState = self.spots.isEmpty
-                logger.info("Refiltered spots: \(self.spots.count) spots after category filter")
-            }
-        } catch {
-            await MainActor.run {
-                self.errorMessage = "Failed to refilter spots: \(error.localizedDescription)"
-                logger.error("Failed to refilter spots: \(error)")
-            }
-        }
-    }
-    
-    /**
-     * Filters spots by selected categories
-     * - Parameter spots: Array of spots to filter
-     * - Returns: Filtered array of spots matching selected categories
-     */
-    private func filterSpotsByCategory(_ spots: [Spot]) -> [Spot] {
-        return spots.filter { spot in
-            // Include spots with type in selectedCategories or "unknown" if not set
-            let spotType = spot.type.isEmpty ? "unknown" : spot.type
-            return selectedCategories.contains(spotType)
-        }
-    }
 }
 #endif// Test comment

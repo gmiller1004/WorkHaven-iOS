@@ -2,18 +2,46 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<!--
+		WorkHaven.entitlements
+		WorkHaven iOS App
+		
+		This file defines the app's entitlements for iOS capabilities including:
+		- Universal Links support for deep linking and sharing
+		- iCloud CloudKit integration for data sync
+		- Push notifications for user alerts
+		- App sandbox security settings
+		
+		Copyright © 2024 WorkHaven. All rights reserved.
+	-->
+	
+	<!-- Universal Links support for deep linking and sharing -->
+	<key>com.apple.developer.associated-domains</key>
+	<array>
+		<string>applinks:nextsizzle.com</string>
+	</array>
+	
+	<!-- Push notifications environment -->
 	<key>aps-environment</key>
 	<string>development</string>
+	
+	<!-- iCloud CloudKit container identifier -->
 	<key>com.apple.developer.icloud-container-identifiers</key>
 	<array>
 		<string>iCloud.com.nextsizzle.wh</string>
 	</array>
+	
+	<!-- iCloud services enabled -->
 	<key>com.apple.developer.icloud-services</key>
 	<array>
 		<string>CloudKit</string>
 	</array>
+	
+	<!-- App sandbox security -->
 	<key>com.apple.security.app-sandbox</key>
 	<true/>
+	
+	<!-- File access permissions -->
 	<key>com.apple.security.files.user-selected.read-only</key>
 	<true/>
 </dict>

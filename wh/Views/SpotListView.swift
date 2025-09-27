@@ -440,7 +440,9 @@ struct SpotListView: View {
             // Prevent deselecting if it would result in empty categories
             if newCategories.count > 1 {
                 newCategories.remove(category)
-                spotViewModel.updateCategories(newCategories)
+                Task {
+                    await spotViewModel.updateCategories(newCategories)
+                }
             } else {
                 logger.info("Cannot deselect last category to prevent empty filter state")
                 // Don't update categories, just return
@@ -448,7 +450,9 @@ struct SpotListView: View {
             }
         } else {
             newCategories.insert(category)
-            spotViewModel.updateCategories(newCategories)
+            Task {
+                await spotViewModel.updateCategories(newCategories)
+            }
         }
     }
 }

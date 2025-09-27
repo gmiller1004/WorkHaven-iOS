@@ -30,6 +30,9 @@ struct SpotDetailView: View {
     @State private var showingRatingForm = false
     @State private var showingError = false
     @State private var errorMessage = ""
+    @State private var showingShareSheet = false
+    @State private var shareItems: [Any] = []
+    @State private var isGeneratingShareCard = false
     
     // Photo gallery state
     @State private var showPhotoViewer = false
@@ -96,6 +99,83 @@ struct SpotDetailView: View {
         logger.debug("Initialized favorite status for '\(spot.name)': \(isFavorited)")
     }
     
+    // MARK: - Share Methods
+    
+    /**
+     * Shares the spot with context-aware content including share card and text
+     */
+    private func shareSpot() async {
+        isGeneratingShareCard = true
+        
+        do {
+            // Create share card as UIImage asynchronously
+            let shareCardImage = try await createShareCardImageAsync()
+            
+            // Create share text with spot details and deep link
+            let shareText = createShareText()
+            
+            // Prepare share items
+            await MainActor.run {
+                shareItems = [shareCardImage, shareText]
+                showingShareSheet = true
+                isGeneratingShareCard = false
+            }
+            
+            logger.info("Prepared share content for spot: \(spot.name)")
+        } catch {
+            await MainActor.run {
+                logger.error("Failed to create share content: \(error.localizedDescription)")
+                errorMessage = "Failed to create share content: \(error.localizedDescription)"
+                showingError = true
+                isGeneratingShareCard = false
+            }
+        }
+    }
+    
+    /**
+     * Creates a share card image from SwiftUI view asynchronously
+     */
+    private func createShareCardImageAsync() async throws -> UIImage {
+        return try await withCheckedThrowingContinuation { continuation in
+            let shareCardView = ShareCardView(spot: spot, distanceString: distanceString)
+            
+            let hostingController = UIHostingController(rootView: shareCardView)
+            hostingController.view.backgroundColor = UIColor.clear
+            
+            // Set the size for the share card
+            let targetSize = CGSize(width: 400, height: 300)
+            hostingController.view.frame = CGRect(origin: .zero, size: targetSize)
+            
+            // Force layout
+            hostingController.view.layoutIfNeeded()
+            
+            // Create image from view asynchronously
+            DispatchQueue.main.async {
+                let renderer = UIGraphicsImageRenderer(size: targetSize)
+                let image = renderer.image { context in
+                    hostingController.view.drawHierarchy(in: hostingController.view.bounds, afterScreenUpdates: true)
+                }
+                continuation.resume(returning: image)
+            }
+        }
+    }
+    
+    /**
+     * Creates share text with spot details and deep link
+     */
+    private func createShareText() -> String {
+        let customSchemeLink = !spot.cloudKitRecordID.isEmpty ? 
+            "workhaven://spot/\(spot.cloudKitRecordID)" : 
+            ""
+        let appStoreLink = "https://apps.apple.com/app/id6752964053"
+        
+        let links = customSchemeLink.isEmpty ? appStoreLink : "\(customSchemeLink) or \(appStoreLink)"
+        
+        return """
+        \(spot.name) - \(distanceString) - \(spot.tips) - Discover your perfect work spot with WorkHaven! \(links) #WorkHaven
+        """
+    }
+    
     var body: some View {
         ScrollView {
                 VStack(alignment: .leading, spacing: ThemeManager.Spacing.md) {
@@ -113,6 +193,20 @@ struct SpotDetailView: View {
             .navigationTitle(spot.name)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Share Spot") {
+                        Task {
+                            await shareSpot()
+                        }
+                    }
+                    .foregroundColor(ThemeManager.SwiftUIColors.coral)
+                    .font(.custom("Avenir Next", size: 16))
+                    .fontWeight(.medium)
+                    .disabled(isGeneratingShareCard)
+                    .accessibilityLabel(isGeneratingShareCard ? "Share spot button, generating card" : "Share spot button")
+                    .accessibilityHint("Share this work spot with others")
+                }
+                
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Done") {
                         dismiss()
@@ -157,6 +251,33 @@ struct SpotDetailView: View {
             .onAppear {
                 initializeFavoriteStatus()
             }
+        .sheet(isPresented: $showingShareSheet) {
+            ActivityViewController(activityItems: shareItems)
+        }
+        .overlay(
+            Group {
+                if isGeneratingShareCard {
+                    ZStack {
+                        Color.black.opacity(0.3)
+                            .ignoresSafeArea()
+                        
+                        VStack(spacing: ThemeManager.Spacing.md) {
+                            ProgressView()
+                                .progressViewStyle(CircularProgressViewStyle(tint: ThemeManager.SwiftUIColors.coral))
+                                .scaleEffect(1.5)
+                            
+                            Text("Generating share card...")
+                                .font(ThemeManager.SwiftUIFonts.body)
+                                .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+                        }
+                        .padding(ThemeManager.Spacing.lg)
+                        .background(ThemeManager.SwiftUIColors.latte)
+                        .cornerRadius(ThemeManager.CornerRadius.medium)
+                        .shadow(color: ThemeManager.SwiftUIColors.mocha.opacity(0.1), radius: 4, x: 0, y: 2)
+                    }
+                }
+            }
+        )
     }
     
     // MARK: - Header Section
@@ -1277,4 +1398,132 @@ struct SpotDetailView_Previews: PreviewProvider {
         return SpotDetailView(spot: sampleSpot, locationService: LocationService.shared)
             .environment(\.managedObjectContext, viewContext)
     }
+}
+
+// MARK: - ShareCardView
+
+/**
+ * SwiftUI view for creating share card images
+ */
+struct ShareCardView: View {
+    let spot: Spot
+    let distanceString: String
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: ThemeManager.Spacing.sm) {
+            // Header with spot name
+            Text(spot.name)
+                .font(.custom("Avenir Next", size: 24))
+                .fontWeight(.bold)
+                .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+                .lineLimit(2)
+            
+            // Rating stars
+            HStack(spacing: 4) {
+                ForEach(0..<5) { index in
+                    Image(systemName: index < Int(calculateOverallRating()) ? "star.fill" : "star")
+                        .font(.system(size: 16))
+                        .foregroundColor(ThemeManager.SwiftUIColors.coral)
+                }
+                Text(String(format: "%.1f", calculateOverallRating()))
+                    .font(.custom("Avenir Next", size: 14))
+                    .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+            }
+            
+            // Tip text
+            if !spot.tips.isEmpty && spot.tips != "No tips available" {
+                Text(spot.tips)
+                    .font(.custom("Avenir Next", size: 14))
+                    .foregroundColor(.gray)
+                    .lineLimit(3)
+            }
+            
+            // Photo or placeholder
+            AsyncImage(url: URL(string: spot.photoURL ?? "")) { image in
+                image
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+            } placeholder: {
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(ThemeManager.SwiftUIColors.latte)
+                    .overlay(
+                        Image(systemName: "photo")
+                            .font(.system(size: 32))
+                            .foregroundColor(ThemeManager.SwiftUIColors.mocha.opacity(0.5))
+                    )
+            }
+            .frame(height: 120)
+            .cornerRadius(8)
+            
+            // WorkHaven branding
+            HStack {
+                Spacer()
+                Text("WorkHaven")
+                    .font(.custom("Avenir Next", size: 12))
+                    .fontWeight(.medium)
+                    .foregroundColor(ThemeManager.SwiftUIColors.coral)
+            }
+        }
+        .padding(ThemeManager.Spacing.md)
+        .background(ThemeManager.SwiftUIColors.latte)
+        .cornerRadius(12)
+        .shadow(color: ThemeManager.SwiftUIColors.mocha.opacity(0.1), radius: 4, x: 0, y: 2)
+    }
+    
+    private func calculateOverallRating() -> Double {
+        // Calculate aggregate rating (50% weight)
+        let wifiNormalized = Double(spot.wifiRating)
+        
+        let noiseInverted: Double
+        switch spot.noiseRating.lowercased() {
+        case "low": noiseInverted = 5.0
+        case "medium": noiseInverted = 3.0
+        case "high": noiseInverted = 1.0
+        default: noiseInverted = 3.0
+        }
+        
+        let outlets = spot.outlets ? 5.0 : 1.0
+        let aggregateRating = (wifiNormalized + noiseInverted + outlets) / 3.0
+        
+        // Calculate user rating average (50% weight)
+        let userRatingAverage: Double
+        if let userRatings = spot.userRatings, userRatings.count > 0 {
+            let totalRating = userRatings.reduce(into: 0.0) { sum, rating in
+                guard let userRating = rating as? UserRating else { return }
+                let wifi = Double(userRating.wifi)
+                let noise: Double
+                switch userRating.noise.lowercased() {
+                case "low": noise = 5.0
+                case "medium": noise = 3.0
+                case "high": noise = 1.0
+                default: noise = 3.0
+                }
+                let outlets = userRating.plugs ? 5.0 : 1.0
+                sum += (wifi + noise + outlets) / 3.0
+            }
+            userRatingAverage = totalRating / Double(userRatings.count)
+        } else {
+            userRatingAverage = 0.0
+        }
+        
+        // Combine with 50/50 weighting and cap at 5 stars
+        let combinedRating = userRatingAverage == 0 ? aggregateRating : (aggregateRating * 0.5) + (userRatingAverage * 0.5)
+        return min(5.0, combinedRating)
+    }
+}
+
+// MARK: - ActivityViewController
+
+/**
+ * UIKit wrapper for UIActivityViewController to use in SwiftUI
+ */
+struct ActivityViewController: UIViewControllerRepresentable {
+    let activityItems: [Any]
+    
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        let controller = UIActivityViewController(activityItems: activityItems, applicationActivities: nil)
+        return controller
+    }
+    
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }
