@@ -143,6 +143,9 @@ struct SettingsView: View {
                 
                 // App Info Section
                 appInfoSection
+                
+                // Legal Section
+                legalSection
             }
             .padding(ThemeManager.Spacing.md)
         }
@@ -487,6 +490,74 @@ struct SettingsView: View {
                         .font(ThemeManager.SwiftUIFonts.caption)
                         .foregroundColor(ThemeManager.SwiftUIColors.mocha.opacity(0.7))
                 }
+            }
+            .padding(ThemeManager.Spacing.md)
+            .background(
+                RoundedRectangle(cornerRadius: ThemeManager.CornerRadius.medium)
+                    .fill(Color.white)
+                    .shadow(
+                        color: ThemeManager.SwiftUIColors.mocha.opacity(0.1),
+                        radius: 2,
+                        x: 0,
+                        y: 1
+                    )
+            )
+        }
+    }
+    
+    // MARK: - Legal Section
+    
+    private var legalSection: some View {
+        VStack(alignment: .leading, spacing: ThemeManager.Spacing.md) {
+            Text("Legal")
+                .font(ThemeManager.SwiftUIFonts.headline)
+                .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+            
+            VStack(spacing: ThemeManager.Spacing.sm) {
+                // Privacy Policy Link
+                Button(action: {
+                    if let url = URL(string: "https://nextsizzle.com/appfamily/workhaven/privacy") {
+                        UIApplication.shared.open(url)
+                    }
+                }) {
+                    HStack {
+                        Text("Privacy Policy")
+                            .font(ThemeManager.SwiftUIFonts.body)
+                            .foregroundColor(ThemeManager.SwiftUIColors.coral)
+                        
+                        Spacer()
+                        
+                        Image(systemName: "arrow.up.right.square")
+                            .font(.system(size: 14))
+                            .foregroundColor(ThemeManager.SwiftUIColors.coral)
+                    }
+                }
+                .accessibilityLabel("Privacy Policy")
+                .accessibilityHint("Opens Privacy Policy in your default browser")
+                
+                Divider()
+                    .background(ThemeManager.SwiftUIColors.mocha.opacity(0.2))
+                
+                // Terms of Service Link
+                Button(action: {
+                    if let url = URL(string: "https://nextsizzle.com/appfamily/workhaven/terms") {
+                        UIApplication.shared.open(url)
+                    }
+                }) {
+                    HStack {
+                        Text("Terms of Service")
+                            .font(ThemeManager.SwiftUIFonts.body)
+                            .foregroundColor(ThemeManager.SwiftUIColors.coral)
+                        
+                        Spacer()
+                        
+                        Image(systemName: "arrow.up.right.square")
+                            .font(.system(size: 14))
+                            .foregroundColor(ThemeManager.SwiftUIColors.coral)
+                    }
+                }
+                .accessibilityLabel("Terms of Service")
+                .accessibilityHint("Opens Terms of Service in your default browser")
             }
             .padding(ThemeManager.Spacing.md)
             .background(
