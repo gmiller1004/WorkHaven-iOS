@@ -97,8 +97,7 @@ struct SpotDetailView: View {
     }
     
     var body: some View {
-        NavigationView {
-            ScrollView {
+        ScrollView {
                 VStack(alignment: .leading, spacing: ThemeManager.Spacing.md) {
                     headerSection
                     mapPreviewSection
@@ -158,7 +157,6 @@ struct SpotDetailView: View {
             .onAppear {
                 initializeFavoriteStatus()
             }
-        }
     }
     
     // MARK: - Header Section
@@ -515,8 +513,7 @@ struct SpotDetailView: View {
     // MARK: - Sheet Views
     
     private var mapView: some View {
-        NavigationView {
-            Map(position: .constant(.region(MKCoordinateRegion(
+        Map(position: .constant(.region(MKCoordinateRegion(
                 center: CLLocationCoordinate2D(latitude: spot.latitude, longitude: spot.longitude),
                 span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
             )))) {
@@ -546,7 +543,6 @@ struct SpotDetailView: View {
                     }
                 }
             }
-        }
     }
     
     private var imagePickerView: some View {
@@ -556,8 +552,7 @@ struct SpotDetailView: View {
     }
     
     private var ratingFormView: some View {
-        NavigationView {
-            Form {
+        Form {
                 Section("WiFi Quality") {
                     VStack(alignment: .leading) {
                         HStack {
@@ -607,7 +602,6 @@ struct SpotDetailView: View {
                     .disabled(userTip.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
-        }
     }
     
     private var photoViewer: some View {
@@ -1034,8 +1028,7 @@ struct PhotoViewer: View {
     private let logger = Logger(subsystem: "com.nextsizzle.wh", category: "PhotoViewer")
     
     var body: some View {
-        NavigationView {
-            ZStack {
+        ZStack {
                 // Background
                 Color.black
                     .ignoresSafeArea()
@@ -1119,7 +1112,6 @@ struct PhotoViewer: View {
                     }
                 }
             )
-        }
     }
     
     // MARK: - Helper Views
