@@ -105,7 +105,8 @@ struct SpotListView: View {
     // MARK: - Body
     
     var body: some View {
-        ZStack {
+        NavigationView {
+            ZStack {
                 // Background
                 ThemeManager.SwiftUIColors.latte
                     .ignoresSafeArea()
@@ -190,6 +191,8 @@ struct SpotListView: View {
                     showingError = true
                 }
             }
+        }
+        .navigationViewStyle(StackNavigationViewStyle())
     }
     
     // MARK: - Views
@@ -215,6 +218,10 @@ struct SpotListView: View {
         }
         .listStyle(PlainListStyle())
         .background(ThemeManager.SwiftUIColors.latte)
+        .safeAreaInset(edge: .bottom) {
+            // Add bottom padding to prevent content from going under tab bar
+            Color.clear.frame(height: 0)
+        }
         .refreshable {
             Task {
                 if let location = locationService.currentLocation {

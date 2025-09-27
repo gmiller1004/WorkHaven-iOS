@@ -51,8 +51,7 @@ struct ContentView: View {
     // MARK: - Body
     
     var body: some View {
-        NavigationView {
-            TabView {
+        TabView {
             // MARK: - List Tab
             SpotListView()
                 .environment(\.managedObjectContext, viewContext)
@@ -79,65 +78,64 @@ struct ContentView: View {
                 }
                 .accessibilityLabel("Settings tab")
                 .tag(2)
+        }
+        .accentColor(ThemeManager.SwiftUIColors.coral)
+        .onAppear {
+            if isIPad {
+                // Apply iPad-specific styling for swipeable tabs
+                UITabBar.appearance().itemPositioning = .centered
+                UITabBar.appearance().itemSpacing = 20
             }
-            .accentColor(ThemeManager.SwiftUIColors.coral)
-                .onAppear {
-                    if isIPad {
-                        // Apply iPad-specific styling for swipeable tabs
-                        UITabBar.appearance().itemPositioning = .centered
-                        UITabBar.appearance().itemSpacing = 20
-                    }
-                    
-                    if !hasRequestedPermissions {
-                        showingOnboarding = true
-                    } else {
-                        // Wait for location before loading spots to avoid San Francisco fallback
-                        if locationService.currentLocation != nil {
-                            loadSpotsIfNeeded()
-                        } else {
-                            logger.info("Waiting for location before loading spots")
-                        }
-                    }
+            
+            if !hasRequestedPermissions {
+                showingOnboarding = true
+            } else {
+                // Wait for location before loading spots to avoid San Francisco fallback
+                if locationService.currentLocation != nil {
+                    loadSpotsIfNeeded()
+                } else {
+                    logger.info("Waiting for location before loading spots")
                 }
-                .onChange(of: locationService.currentLocation) { newLocation in
-                    if let location = newLocation {
-                        logger.info("Location updated: \(location.coordinate.latitude), \(location.coordinate.longitude)")
-                        // Clear spots from previous location to prevent mixing
-                        spotViewModel.clearSpotsForLocationChange()
-                        // Load spots with the new location
-                        Task {
-                            await spotViewModel.loadSpots(near: location)
-                        }
-                    }
+            }
+        }
+        .onChange(of: locationService.currentLocation) { newLocation in
+            if let location = newLocation {
+                logger.info("Location updated: \(location.coordinate.latitude), \(location.coordinate.longitude)")
+                // Clear spots from previous location to prevent mixing
+                spotViewModel.clearSpotsForLocationChange()
+                // Load spots with the new location
+                Task {
+                    await spotViewModel.loadSpots(near: location)
                 }
-                .onChange(of: locationService.errorMessage) { errorMessage in
-                    // Show alert if location service has an error
-                    if errorMessage != nil {
-                        showingLocationError = true
-                    }
+            }
+        }
+        .onChange(of: locationService.errorMessage) { errorMessage in
+            // Show alert if location service has an error
+            if errorMessage != nil {
+                showingLocationError = true
+            }
+        }
+        .alert("Location Error", isPresented: $showingLocationError) {
+            Button("OK", role: .cancel) {
+                locationService.clearError()
+            }
+            .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+        } message: {
+            Text(locationService.errorMessage ?? "Location services are unavailable")
+                .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+        }
+        .background(ThemeManager.SwiftUIColors.latte)
+        .sheet(isPresented: $showingOnboarding) {
+            OnboardingView(
+                isRequestingPermissions: $isRequestingPermissions,
+                onPermissionsGranted: {
+                    hasRequestedPermissions = true
+                    UserDefaults.standard.set(true, forKey: "HasRequestedPermissions")
+                    showingOnboarding = false
+                    // Don't load spots immediately - wait for location update
+                    logger.info("Permissions granted, waiting for location update")
                 }
-                .alert("Location Error", isPresented: $showingLocationError) {
-                    Button("OK", role: .cancel) {
-                        locationService.clearError()
-                    }
-                    .foregroundColor(ThemeManager.SwiftUIColors.mocha)
-                } message: {
-                    Text(locationService.errorMessage ?? "Location services are unavailable")
-                        .foregroundColor(ThemeManager.SwiftUIColors.mocha)
-                }
-                .background(ThemeManager.SwiftUIColors.latte)
-                .sheet(isPresented: $showingOnboarding) {
-                    OnboardingView(
-                        isRequestingPermissions: $isRequestingPermissions,
-                        onPermissionsGranted: {
-                            hasRequestedPermissions = true
-                            UserDefaults.standard.set(true, forKey: "HasRequestedPermissions")
-                            showingOnboarding = false
-                            // Don't load spots immediately - wait for location update
-                            logger.info("Permissions granted, waiting for location update")
-                        }
-                    )
-                }
+            )
         }
     }
     
