@@ -122,6 +122,10 @@ struct SpotDetailView: View {
             }
             
             logger.info("Prepared share content for spot: \(spot.name)")
+            logger.info("Share card image size: \(shareCardImage.size.width) x \(shareCardImage.size.height)")
+            logger.info("Share text length: \(shareText.count) characters")
+            logger.info("Share text preview: \(String(shareText.prefix(100)))...")
+            logger.info("Activity items count: \(shareItems.count)")
         } catch {
             await MainActor.run {
                 logger.error("Failed to create share content: \(error.localizedDescription)")
@@ -137,7 +141,7 @@ struct SpotDetailView: View {
      */
     private func createShareCardImageAsync() async throws -> UIImage {
         return try await withCheckedThrowingContinuation { continuation in
-            let shareCardView = ShareCardView(spot: spot, distanceString: distanceString)
+            let shareCardView = ShareCardView(spot: spot, distanceString: distanceString, rating: calculateOverallRating())
             
             let hostingController = UIHostingController(rootView: shareCardView)
             hostingController.view.backgroundColor = UIColor.clear
@@ -146,34 +150,84 @@ struct SpotDetailView: View {
             let targetSize = CGSize(width: 400, height: 300)
             hostingController.view.frame = CGRect(origin: .zero, size: targetSize)
             
-            // Force layout
+            // Add to a temporary window for proper rendering
+            let window = UIWindow(frame: CGRect(origin: .zero, size: targetSize))
+            window.rootViewController = hostingController
+            window.makeKeyAndVisible()
+            
+            // Force layout and wait for next run loop
             hostingController.view.layoutIfNeeded()
             
-            // Create image from view asynchronously
-            DispatchQueue.main.async {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                 let renderer = UIGraphicsImageRenderer(size: targetSize)
                 let image = renderer.image { context in
                     hostingController.view.drawHierarchy(in: hostingController.view.bounds, afterScreenUpdates: true)
                 }
+                
+                // Clean up the temporary window
+                window.isHidden = true
+                window.rootViewController = nil
+                
                 continuation.resume(returning: image)
             }
         }
     }
     
     /**
-     * Creates share text with spot details and deep link
+     * Calculates the overall rating for a spot based on aggregate and user ratings
+     */
+    private func calculateOverallRating() -> Double {
+        // Calculate aggregate rating (50% weight)
+        let wifiNormalized = Double(spot.wifiRating)
+        
+        let noiseInverted: Double
+        switch spot.noiseRating.lowercased() {
+        case "low": noiseInverted = 5.0
+        case "medium": noiseInverted = 3.0
+        case "high": noiseInverted = 1.0
+        default: noiseInverted = 3.0
+        }
+        
+        let outlets = spot.outlets ? 5.0 : 1.0
+        let aggregateRating = (wifiNormalized + noiseInverted + outlets) / 3.0
+        
+        // Calculate user rating average (50% weight)
+        let userRatingAverage: Double
+        if let userRatings = spot.userRatings, userRatings.count > 0 {
+            let totalRating = userRatings.reduce(into: 0.0) { sum, rating in
+                guard let userRating = rating as? UserRating else { return }
+                let wifi = Double(userRating.wifi)
+                let noise: Double
+                switch userRating.noise.lowercased() {
+                case "low": noise = 5.0
+                case "medium": noise = 3.0
+                case "high": noise = 1.0
+                default: noise = 3.0
+                }
+                let outlets = userRating.plugs ? 5.0 : 1.0
+                sum += (wifi + noise + outlets) / 3.0
+            }
+            userRatingAverage = totalRating / Double(userRatings.count)
+        } else {
+            userRatingAverage = 0.0
+        }
+        
+        // Combine with 50/50 weighting and cap at 5 stars
+        let combinedRating = userRatingAverage == 0 ? aggregateRating : (aggregateRating * 0.5) + (userRatingAverage * 0.5)
+        return min(5.0, combinedRating)
+    }
+
+    /**
+     * Creates share text with spot details and Universal Link
      */
     private func createShareText() -> String {
-        let customSchemeLink = !spot.cloudKitRecordID.isEmpty ? 
-            "workhaven://spot/\(spot.cloudKitRecordID)" : 
-            ""
-        let appStoreLink = "https://apps.apple.com/app/id6752964053"
+        // Create Universal Link using the specified format
+        let universalLink = "https://nextsizzle.com/spot/\(spot.cloudKitRecordID.isEmpty ? "unknown" : spot.cloudKitRecordID)"
         
-        let links = customSchemeLink.isEmpty ? appStoreLink : "\(customSchemeLink) or \(appStoreLink)"
+        // Format the share text exactly as specified
+        let shareText = "\(spot.name) - \(distanceString) - \(spot.tips) - Discover your perfect work spot with WorkHaven! \(universalLink) #WorkHaven"
         
-        return """
-        \(spot.name) - \(distanceString) - \(spot.tips) - Discover your perfect work spot with WorkHaven! \(links) #WorkHaven
-        """
+        return shareText
     }
     
     var body: some View {
@@ -202,6 +256,10 @@ struct SpotDetailView: View {
                     .foregroundColor(ThemeManager.SwiftUIColors.coral)
                     .font(.custom("Avenir Next", size: 16))
                     .fontWeight(.medium)
+                    .padding(.horizontal, ThemeManager.Spacing.sm)
+                    .padding(.vertical, ThemeManager.Spacing.xs)
+                    .background(ThemeManager.SwiftUIColors.latte)
+                    .cornerRadius(ThemeManager.CornerRadius.small)
                     .disabled(isGeneratingShareCard)
                     .accessibilityLabel(isGeneratingShareCard ? "Share spot button, generating card" : "Share spot button")
                     .accessibilityHint("Share this work spot with others")
@@ -229,9 +287,12 @@ struct SpotDetailView: View {
             }
             .alert("Error", isPresented: $showingError) {
                 Button("OK") { }
+                    .foregroundColor(ThemeManager.SwiftUIColors.mocha)
             } message: {
                 Text(errorMessage)
+                    .foregroundColor(ThemeManager.SwiftUIColors.mocha)
             }
+            .background(ThemeManager.SwiftUIColors.latte)
             .alert("Confirm Flag", isPresented: $showFlagConfirmation) {
                 Button("Cancel", role: .cancel) { }
                 Button("Flag as Inappropriate", role: .destructive) {
@@ -1408,29 +1469,27 @@ struct SpotDetailView_Previews: PreviewProvider {
 struct ShareCardView: View {
     let spot: Spot
     let distanceString: String
+    let rating: Double
     
     var body: some View {
         VStack(alignment: .leading, spacing: ThemeManager.Spacing.sm) {
-            // Header with spot name
+            // Header with spot name - headline mocha #8B5E3C
             Text(spot.name)
-                .font(.custom("Avenir Next", size: 24))
+                .font(.custom("Avenir Next", size: 20))
                 .fontWeight(.bold)
                 .foregroundColor(ThemeManager.SwiftUIColors.mocha)
                 .lineLimit(2)
             
-            // Rating stars
+            // Overall rating stars - coral #F28C38
             HStack(spacing: 4) {
                 ForEach(0..<5) { index in
-                    Image(systemName: index < Int(calculateOverallRating()) ? "star.fill" : "star")
+                    Image(systemName: index < Int(rating) ? "star.fill" : "star")
                         .font(.system(size: 16))
                         .foregroundColor(ThemeManager.SwiftUIColors.coral)
                 }
-                Text(String(format: "%.1f", calculateOverallRating()))
-                    .font(.custom("Avenir Next", size: 14))
-                    .foregroundColor(ThemeManager.SwiftUIColors.mocha)
             }
             
-            // Tip text
+            // Tip text - gray
             if !spot.tips.isEmpty && spot.tips != "No tips available" {
                 Text(spot.tips)
                     .font(.custom("Avenir Next", size: 14))
@@ -1438,7 +1497,7 @@ struct ShareCardView: View {
                     .lineLimit(3)
             }
             
-            // Photo or placeholder
+            // AsyncImage from photoURL or placeholder
             AsyncImage(url: URL(string: spot.photoURL ?? "")) { image in
                 image
                     .resizable()
@@ -1454,61 +1513,11 @@ struct ShareCardView: View {
             }
             .frame(height: 120)
             .cornerRadius(8)
-            
-            // WorkHaven branding
-            HStack {
-                Spacer()
-                Text("WorkHaven")
-                    .font(.custom("Avenir Next", size: 12))
-                    .fontWeight(.medium)
-                    .foregroundColor(ThemeManager.SwiftUIColors.coral)
-            }
         }
-        .padding(ThemeManager.Spacing.md)
+        .padding(ThemeManager.Spacing.sm)
         .background(ThemeManager.SwiftUIColors.latte)
         .cornerRadius(12)
         .shadow(color: ThemeManager.SwiftUIColors.mocha.opacity(0.1), radius: 4, x: 0, y: 2)
-    }
-    
-    private func calculateOverallRating() -> Double {
-        // Calculate aggregate rating (50% weight)
-        let wifiNormalized = Double(spot.wifiRating)
-        
-        let noiseInverted: Double
-        switch spot.noiseRating.lowercased() {
-        case "low": noiseInverted = 5.0
-        case "medium": noiseInverted = 3.0
-        case "high": noiseInverted = 1.0
-        default: noiseInverted = 3.0
-        }
-        
-        let outlets = spot.outlets ? 5.0 : 1.0
-        let aggregateRating = (wifiNormalized + noiseInverted + outlets) / 3.0
-        
-        // Calculate user rating average (50% weight)
-        let userRatingAverage: Double
-        if let userRatings = spot.userRatings, userRatings.count > 0 {
-            let totalRating = userRatings.reduce(into: 0.0) { sum, rating in
-                guard let userRating = rating as? UserRating else { return }
-                let wifi = Double(userRating.wifi)
-                let noise: Double
-                switch userRating.noise.lowercased() {
-                case "low": noise = 5.0
-                case "medium": noise = 3.0
-                case "high": noise = 1.0
-                default: noise = 3.0
-                }
-                let outlets = userRating.plugs ? 5.0 : 1.0
-                sum += (wifi + noise + outlets) / 3.0
-            }
-            userRatingAverage = totalRating / Double(userRatings.count)
-        } else {
-            userRatingAverage = 0.0
-        }
-        
-        // Combine with 50/50 weighting and cap at 5 stars
-        let combinedRating = userRatingAverage == 0 ? aggregateRating : (aggregateRating * 0.5) + (userRatingAverage * 0.5)
-        return min(5.0, combinedRating)
     }
 }
 
@@ -1522,6 +1531,21 @@ struct ActivityViewController: UIViewControllerRepresentable {
     
     func makeUIViewController(context: Context) -> UIActivityViewController {
         let controller = UIActivityViewController(activityItems: activityItems, applicationActivities: nil)
+        
+        // Don't exclude any activity types - let system decide what's available
+        controller.excludedActivityTypes = []
+        
+        // Add completion handler for debugging
+        controller.completionWithItemsHandler = { activityType, completed, returnedItems, error in
+            if let error = error {
+                print("Share error: \(error.localizedDescription)")
+            } else if completed {
+                print("Share completed with activity: \(activityType?.rawValue ?? "unknown")")
+            } else {
+                print("Share cancelled")
+            }
+        }
+        
         return controller
     }
     

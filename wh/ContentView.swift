@@ -230,7 +230,7 @@ struct OnboardingView: View {
                                     .progressViewStyle(CircularProgressViewStyle(tint: ThemeManager.SwiftUIColors.latte))
                                     .scaleEffect(0.8)
                             }
-                            Text(isRequestingPermissions ? "Requesting Permissions..." : "Grant Permissions")
+                            Text(isRequestingPermissions ? "Requesting Permissions..." : "Continue")
                                 .font(ThemeManager.SwiftUIFonts.button)
                                 .fontWeight(.semibold)
                         }
@@ -241,14 +241,7 @@ struct OnboardingView: View {
                         .cornerRadius(ThemeManager.CornerRadius.medium)
                     }
                     .disabled(isRequestingPermissions)
-                    .accessibilityLabel("Grant location and notification permissions")
-                    
-                    Button("Skip for Now") {
-                        onPermissionsGranted()
-                    }
-                    .font(ThemeManager.SwiftUIFonts.body)
-                    .foregroundColor(ThemeManager.SwiftUIColors.mocha)
-                    .accessibilityLabel("Skip permission requests for now")
+                    .accessibilityLabel("Continue to request location and notification permissions")
                 }
                 .padding(.horizontal, ThemeManager.Spacing.lg)
                 .padding(.bottom, ThemeManager.Spacing.xl)
