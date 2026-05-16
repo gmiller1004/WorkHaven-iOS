@@ -38,8 +38,8 @@ extension Spot {
     /// Overall noise level rating for this spot
     @NSManaged public var noiseRating: String
     
-    /// Whether outlets/plugs are available at this spot
-    @NSManaged public var outlets: Bool
+    /// Outlet availability: nil = unknown, true/false = known
+    @NSManaged public var outlets: NSNumber?
     
     /// General tips and notes about this work spot
     @NSManaged public var tips: String
@@ -58,6 +58,15 @@ extension Spot {
     
     /// Canonical community spot identifier from Supabase
     @NSManaged public var supabaseId: String?
+    
+    /// How amenity fields were produced: baseline, community_reviews, or web_search
+    @NSManaged public var enrichmentSource: String?
+    
+    /// Phone number from Apple Maps (when available)
+    @NSManaged public var phone: String?
+    
+    /// Website URL from Apple Maps (when available)
+    @NSManaged public var website: String?
     
     /// Type of work spot (e.g., "coffee shop", "library", "coworking space")
     @NSManaged public var type: String

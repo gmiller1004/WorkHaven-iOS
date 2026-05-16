@@ -12,6 +12,7 @@ import OSLog
 enum SupabaseCommunityError: LocalizedError {
     case notConfigured
     case invalidResponse
+    case researchFailed(String)
     
     var errorDescription: String? {
         switch self {
@@ -19,6 +20,8 @@ enum SupabaseCommunityError: LocalizedError {
             return "Supabase is not configured. Add SUPABASE_URL and SUPABASE_ANON_KEY to Secrets.xcconfig."
         case .invalidResponse:
             return "Unexpected response from Supabase."
+        case .researchFailed(let message):
+            return message
         }
     }
 }
@@ -33,13 +36,31 @@ struct RemoteSpot: Codable, Sendable {
     let type: String
     let wifiRating: Int
     let noiseRating: String
-    let outlets: Bool
+    let outlets: Bool?
     let tips: String
     let enrichedAt: Date?
+    let enrichmentSource: String?
+    let enrichmentReviewCount: Int?
+    let phone: String?
+    let website: String?
 }
 
 struct DiscoverEnrichRequest: Encodable, Sendable {
-    let locations: [DiscoverLocationPayload]
+    let locations: [DiscoverLocationPayload]?
+    let spotIds: [UUID]?
+    
+    enum CodingKeys: String, CodingKey {
+        case locations
+        case spotIds = "spot_ids"
+    }
+}
+
+struct ReEnrichSpotRequest: Encodable, Sendable {
+    let spotIds: [UUID]
+    
+    enum CodingKeys: String, CodingKey {
+        case spotIds = "spot_ids"
+    }
 }
 
 struct DiscoverLocationPayload: Encodable, Sendable {
@@ -48,6 +69,43 @@ struct DiscoverLocationPayload: Encodable, Sendable {
     let latitude: Double
     let longitude: Double
     let type: String
+    let phone: String?
+    let website: String?
+    let poiCategory: String?
+    let externalPlaceId: String?
+    
+    enum CodingKeys: String, CodingKey {
+        case name
+        case address
+        case latitude
+        case longitude
+        case type
+        case phone
+        case website
+        case poiCategory = "poi_category"
+        case externalPlaceId = "external_place_id"
+    }
+}
+
+struct ResearchSpotRequest: Encodable, Sendable {
+    let spotId: UUID
+    /// When true, edge function allows research even if community reviews exist.
+    let fromProblemReport: Bool
+    
+    enum CodingKeys: String, CodingKey {
+        case spotId = "spot_id"
+        case fromProblemReport = "from_problem_report"
+    }
+    
+    init(spotId: UUID, fromProblemReport: Bool = false) {
+        self.spotId = spotId
+        self.fromProblemReport = fromProblemReport
+    }
+}
+
+struct ResearchSpotResponse: Decodable, Sendable {
+    let spot: RemoteSpot?
+    let error: String?
 }
 
 struct DiscoverEnrichResponse: Decodable, Sendable {
@@ -94,7 +152,7 @@ final class SupabaseCommunityService {
             let response: DiscoverEnrichResponse = try await client.functions.invoke(
                 "discover-enrich",
                 options: FunctionInvokeOptions(
-                    body: DiscoverEnrichRequest(locations: locations)
+                    body: DiscoverEnrichRequest(locations: locations, spotIds: nil)
                 )
             )
             logger.info("discover-enrich returned \(response.spots.count) spots")
@@ -102,6 +160,53 @@ final class SupabaseCommunityService {
         } catch {
             logger.error("discover-enrich decode failed: \(error.localizedDescription)")
             throw error
+        }
+    }
+    
+    /// Re-aggregates amenity fields from community reviews for one spot (no web search).
+    func enrichSpotFromCommunity(spotId: UUID) async throws -> RemoteSpot? {
+        let client = try SupabaseClientProvider.shared.requireClient()
+        
+        let response: DiscoverEnrichResponse = try await client.functions.invoke(
+            "discover-enrich",
+            options: FunctionInvokeOptions(
+                body: ReEnrichSpotRequest(spotIds: [spotId])
+            )
+        )
+        
+        logger.info("Re-enriched spot \(spotId.uuidString) via \(response.spots.first?.enrichmentSource ?? "unknown")")
+        return response.spots.first
+    }
+    
+    /// On-demand web research via OpenRouter (edge function `research-spot`).
+    func researchSpot(spotId: UUID, fromProblemReport: Bool = false) async throws -> RemoteSpot {
+        let client = try SupabaseClientProvider.shared.requireClient()
+        
+        do {
+            let response: ResearchSpotResponse = try await client.functions.invoke(
+                "research-spot",
+                options: FunctionInvokeOptions(
+                    body: ResearchSpotRequest(
+                        spotId: spotId,
+                        fromProblemReport: fromProblemReport
+                    )
+                )
+            )
+            
+            if let error = response.error, !error.isEmpty {
+                throw SupabaseCommunityError.researchFailed(error)
+            }
+            
+            guard let spot = response.spot else {
+                throw SupabaseCommunityError.invalidResponse
+            }
+            
+            logger.info("Web research completed for \(spotId.uuidString)")
+            return spot
+        } catch let researchError as SupabaseCommunityError {
+            throw researchError
+        } catch {
+            throw SupabaseCommunityError.researchFailed(error.localizedDescription)
         }
     }
     
@@ -117,6 +222,10 @@ final class SupabaseCommunityService {
         
         if context.hasChanges {
             try context.save()
+        }
+        
+        for remote in remoteSpots {
+            CommunitySpotNotifications.postSpotUpdated(supabaseId: remote.id.uuidString)
         }
         
         return localSpots
@@ -143,8 +252,17 @@ final class SupabaseCommunityService {
         spot.type = remote.type
         spot.wifiRating = Int16(remote.wifiRating)
         spot.noiseRating = remote.noiseRating
-        spot.outlets = remote.outlets
         spot.tips = remote.tips
+        spot.enrichmentSource = remote.enrichmentSource
+        if remote.enrichmentSource == "baseline" {
+            spot.outlets = nil
+        } else if let outlets = remote.outlets {
+            spot.outlets = NSNumber(value: outlets)
+        } else {
+            spot.outlets = nil
+        }
+        spot.phone = remote.phone
+        spot.website = remote.website
         spot.lastSeeded = remote.enrichedAt ?? Date()
         spot.lastModified = Date()
         spot.markAsModified()

@@ -54,7 +54,8 @@ public class Spot: NSManagedObject {
     /// Returns the percentage of users who found outlets available
     public var outletAvailabilityPercentage: Double {
         guard let ratings = userRatings?.allObjects as? [UserRating], !ratings.isEmpty else {
-            return outlets ? 100.0 : 0.0
+            guard let outlets else { return 0.0 }
+            return outlets.boolValue ? 100.0 : 0.0
         }
         
         let withOutlets = ratings.filter { $0.plugs }.count
@@ -116,8 +117,10 @@ public class Spot: NSManagedObject {
     public var amenitiesSummary: String {
         var amenities: [String] = []
         
-        if outlets {
-            amenities.append("Outlets Available")
+        if let outlets {
+            amenities.append(outlets.boolValue ? "Outlets Available" : "Outlets Limited")
+        } else {
+            amenities.append("Outlets Unknown")
         }
         
         if !tips.isEmpty {

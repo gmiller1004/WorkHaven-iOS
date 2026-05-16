@@ -7,13 +7,16 @@
         <attribute name="longitude" optional="NO" attributeType="Double" defaultValueString="0.0"/>
         <attribute name="wifiRating" optional="NO" attributeType="Integer 16" defaultValueString="0"/>
         <attribute name="noiseRating" optional="NO" attributeType="String" defaultValueString="Medium"/>
-        <attribute name="outlets" optional="NO" attributeType="Boolean" defaultValueString="NO"/>
+        <attribute name="outlets" optional="YES" attributeType="Boolean"/>
         <attribute name="tips" optional="NO" attributeType="String" defaultValueString="No tips available"/>
         <attribute name="photoURL" optional="YES" attributeType="String"/>
         <attribute name="lastModified" optional="NO" attributeType="Date" defaultValueString="0.0"/>
         <attribute name="lastSeeded" optional="NO" attributeType="Date" defaultValueString="0.0"/>
         <attribute name="cloudKitRecordID" optional="NO" attributeType="String" defaultValueString=""/>
         <attribute name="supabaseId" optional="YES" attributeType="String"/>
+        <attribute name="enrichmentSource" optional="YES" attributeType="String"/>
+        <attribute name="phone" optional="YES" attributeType="String"/>
+        <attribute name="website" optional="YES" attributeType="String"/>
         <attribute name="type" optional="NO" attributeType="String" defaultValueString="unknown"/>
         <relationship name="userRatings" optional="YES" toMany="YES" deletionRule="Cascade" destinationEntity="UserRating" inverseName="spot" inverseEntity="UserRating"/>
         <relationship name="photos" optional="YES" toMany="YES" deletionRule="Cascade" destinationEntity="Photo" inverseName="spot" inverseEntity="Photo"/>
@@ -24,6 +27,7 @@
         <attribute name="wifi" optional="NO" attributeType="Integer 16" defaultValueString="0"/>
         <attribute name="noise" optional="NO" attributeType="String" defaultValueString="Medium"/>
         <attribute name="plugs" optional="NO" attributeType="Boolean" defaultValueString="NO"/>
+        <attribute name="stars" optional="NO" attributeType="Integer 16" defaultValueString="0"/>
         <attribute name="tip" optional="NO" attributeType="String" defaultValueString="No tip provided"/>
         <attribute name="supabaseId" optional="YES" attributeType="String"/>
         <relationship name="spot" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="Spot" inverseName="userRatings" inverseEntity="Spot"/>

@@ -205,54 +205,71 @@ public class NotificationManager: NSObject, ObservableObject {
      * - Parameter delay: Delay in seconds before showing notification (default: 30)
      */
     public func scheduleCommunityUpdate(for spot: Spot, activityType: String, delay: TimeInterval = 30) {
+        scheduleCommunityUpdate(
+            forSpotName: spot.name,
+            spotSupabaseId: spot.supabaseId,
+            spotObjectIDURI: spot.objectID.uriRepresentation().absoluteString,
+            activityType: activityType,
+            delay: delay
+        )
+    }
+
+    /// Schedules a local notification for new activity on a favorited spot.
+    public func scheduleCommunityUpdate(
+        forSpotName spotName: String,
+        spotSupabaseId: String?,
+        spotObjectIDURI: String? = nil,
+        activityType: String,
+        delay: TimeInterval = 1
+    ) {
         guard isAuthorized else {
             logger.warning("Cannot schedule community update: not authorized")
             return
         }
-        
-        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: delay, repeats: false)
-        
-        // Create notification content based on activity type
+
+        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: max(1, delay), repeats: false)
+
         let content = UNMutableNotificationContent()
         content.sound = .default
         content.badge = 1
-        
+
         switch activityType.lowercased() {
-        case "rating":
-            content.title = "New Rating Added!"
-            content.body = "Someone rated \(spot.name) - check it out!"
         case "photo":
-            content.title = "New Photo Added!"
-            content.body = "See the latest photo of \(spot.name)"
+            content.title = "New photo on a favorite"
+            content.body = "Someone added a photo to \(spotName)"
         case "tip":
-            content.title = "New Tip Added!"
-            content.body = "Read the latest tip for \(spot.name)"
+            content.title = "New tip on a favorite"
+            content.body = "Someone shared a tip for \(spotName)"
         default:
-            content.title = "Spot Updated!"
-            content.body = "\(spot.name) has new activity"
+            content.title = "Update on a favorite"
+            content.body = "\(spotName) has new activity"
         }
-        
-        // Add spot information to user info
-        content.userInfo = [
-            "spotID": spot.objectID.uriRepresentation().absoluteString,
-            "spotName": spot.name,
+
+        var userInfo: [String: Any] = [
+            "spotName": spotName,
             "activityType": activityType,
             "notificationType": "community_update"
         ]
+        if let spotSupabaseId {
+            userInfo["supabaseId"] = spotSupabaseId
+        }
+        if let spotObjectIDURI {
+            userInfo["spotID"] = spotObjectIDURI
+        }
+        content.userInfo = userInfo
         
-        // Create notification request
+        let idSuffix = spotSupabaseId ?? spotObjectIDURI ?? spotName
         let request = UNNotificationRequest(
-            identifier: "community_\(spot.objectID)_\(activityType)_\(Date().timeIntervalSince1970)",
+            identifier: "community_\(idSuffix)_\(activityType)_\(Date().timeIntervalSince1970)",
             content: content,
             trigger: trigger
         )
-        
-        // Schedule notification
+
         notificationCenter.add(request) { [weak self] error in
             if let error = error {
-                self?.logger.error("Failed to schedule community update for \(spot.name): \(error.localizedDescription)")
+                self?.logger.error("Failed to schedule community update for \(spotName): \(error.localizedDescription)")
             } else {
-                self?.logger.info("Scheduled community update for spot: \(spot.name), activity: \(activityType)")
+                self?.logger.info("Scheduled community update for \(spotName), activity: \(activityType)")
             }
         }
     }

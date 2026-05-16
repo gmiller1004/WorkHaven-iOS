@@ -34,3 +34,6 @@ enable_anonymous_sign_ins = true
 
 [functions.discover-enrich]
 verify_jwt = true
+
+[functions.research-spot]
+verify_jwt = true

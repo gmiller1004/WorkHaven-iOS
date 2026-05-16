@@ -29,6 +29,9 @@ extension UserRating {
     /// Whether electrical outlets/plugs are available
     @NSManaged public var plugs: Bool
     
+    /// User's overall 1–5 star rating for this spot
+    @NSManaged public var stars: Int16
+    
     /// User's tips and additional notes about the spot
     @NSManaged public var tip: String
     

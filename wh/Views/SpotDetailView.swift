@@ -49,6 +49,7 @@ struct SpotDetailView: View {
     @State private var showAllTips = false
     
     // User rating form state
+    @State private var overallStarRating: Double = 4.0
     @State private var wifiRating: Double = 3.0
     @State private var noiseLevel = "Medium"
     @State private var outletsAvailable = true
@@ -56,6 +57,10 @@ struct SpotDetailView: View {
     
     // Favorite state
     @State private var isFavorited: Bool = false
+    @State private var isFavoriteBusy = false
+    
+    @State private var showingReportProblem = false
+    @State private var showingReportSubmitted = false
     
     // Photo picker state
     @State private var selectedImage: UIImage?
@@ -79,29 +84,42 @@ struct SpotDetailView: View {
     // MARK: - Favorite Methods
     
     /**
-     * Toggles the favorite status of the spot
+     * Toggles the favorite status of the spot (Core Data + Supabase when configured).
      */
     private func toggleFavorite() {
-        if isFavorited {
-            // Remove from favorites
-            spot.removeFromFavorites(in: viewContext)
-            isFavorited = false
-            logger.info("Removed spot '\(spot.name)' from favorites")
-        } else {
-            // Add to favorites
-            spot.addToFavorites(in: viewContext)
-            isFavorited = true
-            logger.info("Added spot '\(spot.name)' to favorites")
-            
-            // Schedule community update notification if enabled
-            if UserDefaults.standard.bool(forKey: "CommunityUpdatesEnabled") {
-                notificationManager.scheduleCommunityUpdate(for: spot, activityType: "favorite")
-                logger.info("Scheduled community update notification for favorited spot")
+        guard !isFavoriteBusy else { return }
+        let adding = !isFavorited
+        Task { await toggleFavoriteAsync(adding: adding) }
+    }
+
+    @MainActor
+    private func toggleFavoriteAsync(adding: Bool) async {
+        isFavoriteBusy = true
+        isFavorited = adding
+        defer { isFavoriteBusy = false }
+
+        do {
+            if AppConfig.isSupabaseConfigured {
+                try await SupabaseFavoritesService.shared.setFavorite(
+                    adding,
+                    for: spot,
+                    in: viewContext
+                )
+            } else if adding {
+                _ = spot.addToFavorites(in: viewContext)
+                try viewContext.save()
+            } else {
+                spot.removeFromFavorites(in: viewContext)
+                try viewContext.save()
             }
+            isFavorited = spot.isFavorited
+            logger.info("\(adding ? "Added" : "Removed") favorite for '\(spot.name)'")
+        } catch {
+            isFavorited = spot.isFavorited
+            let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            showError(message)
+            logger.warning("Favorite toggle failed: \(message)")
         }
-        
-        // Save changes to Core Data and CloudKit
-        saveContext()
     }
     
     /**
@@ -154,7 +172,11 @@ struct SpotDetailView: View {
      */
     private func createShareCardImageAsync() async throws -> UIImage {
         return try await withCheckedThrowingContinuation { continuation in
-            let shareCardView = ShareCardView(spot: spot, distanceString: distanceString, rating: calculateOverallRating())
+            let shareCardView = ShareCardView(
+                spot: spot,
+                distanceString: distanceString,
+                rating: spot.communityStarRating ?? 0
+            )
             
             let hostingController = UIHostingController(rootView: shareCardView)
             hostingController.view.backgroundColor = UIColor.clear
@@ -187,50 +209,6 @@ struct SpotDetailView: View {
     }
     
     /**
-     * Calculates the overall rating for a spot based on aggregate and user ratings
-     */
-    private func calculateOverallRating() -> Double {
-        // Calculate aggregate rating (50% weight)
-        let wifiNormalized = Double(spot.wifiRating)
-        
-        let noiseInverted: Double
-        switch spot.noiseRating.lowercased() {
-        case "low": noiseInverted = 5.0
-        case "medium": noiseInverted = 3.0
-        case "high": noiseInverted = 1.0
-        default: noiseInverted = 3.0
-        }
-        
-        let outlets = spot.outlets ? 5.0 : 1.0
-        let aggregateRating = (wifiNormalized + noiseInverted + outlets) / 3.0
-        
-        // Calculate user rating average (50% weight)
-        let userRatingAverage: Double
-        if let userRatings = spot.userRatings, userRatings.count > 0 {
-            let totalRating = userRatings.reduce(into: 0.0) { sum, rating in
-                guard let userRating = rating as? UserRating else { return }
-                let wifi = Double(userRating.wifi)
-                let noise: Double
-                switch userRating.noise.lowercased() {
-                case "low": noise = 5.0
-                case "medium": noise = 3.0
-                case "high": noise = 1.0
-                default: noise = 3.0
-                }
-                let outlets = userRating.plugs ? 5.0 : 1.0
-                sum += (wifi + noise + outlets) / 3.0
-            }
-            userRatingAverage = totalRating / Double(userRatings.count)
-        } else {
-            userRatingAverage = 0.0
-        }
-        
-        // Combine with 50/50 weighting and cap at 5 stars
-        let combinedRating = userRatingAverage == 0 ? aggregateRating : (aggregateRating * 0.5) + (userRatingAverage * 0.5)
-        return min(5.0, combinedRating)
-    }
-
-    /**
      * Creates share text with spot details and Universal Link
      */
     private func createShareText() -> String {
@@ -251,13 +229,16 @@ struct SpotDetailView: View {
                     mapPreviewSection
                     directionsSection
                     ratingsSection
+                    communityReviewsSection
                     userRatingFormSection
-                    tipsSection
+                    spotSummarySection
                     userTipsSection
                     photoGallerySection
                 }
                 .padding()
             }
+            .scrollDismissesKeyboard(.interactively)
+            .dismissKeyboardOnTap()
             .navigationTitle(spot.name)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -294,7 +275,24 @@ struct SpotDetailView: View {
                 imagePickerView
             }
             .sheet(isPresented: $showingRatingForm) {
-                ratingFormView
+                NavigationStack {
+                    ratingFormView
+                }
+                .dismissKeyboardOnTap()
+            }
+            .sheet(isPresented: $showingReportProblem) {
+                ReportProblemSheet(
+                    spotName: spot.name,
+                    allowsWebResearch: usesCommunityBackend && spot.supabaseId != nil,
+                    onResearch: usesCommunityBackend && spot.supabaseId != nil
+                        ? { try await researchSpotFromWeb(fromProblemReport: true) }
+                        : nil,
+                    onSubmit: { category, details in
+                        try await submitProblemReport(category: category, details: details)
+                        showingReportSubmitted = true
+                    },
+                    onCancel: { showingReportProblem = false }
+                )
             }
             .sheet(isPresented: $showingCommunitySignIn) {
                 CommunitySignInSheet(
@@ -311,6 +309,11 @@ struct SpotDetailView: View {
             }
             .fullScreenCover(isPresented: $showPhotoViewer) {
                 photoViewer
+            }
+            .alert("Report Submitted", isPresented: $showingReportSubmitted) {
+                Button("OK", role: .cancel) { }
+            } message: {
+                Text("Thanks for helping improve this listing. We'll review your report.")
             }
             .alert("Error", isPresented: $showingError) {
                 Button("OK") { }
@@ -341,6 +344,10 @@ struct SpotDetailView: View {
             }
             .onAppear {
                 initializeFavoriteStatus()
+                spot.normalizeOutletUnknownState()
+                if viewContext.hasChanges {
+                    try? viewContext.save()
+                }
                 Task {
                     await SupabaseUGCService.shared.refreshCommunityContent(for: spot)
                     viewContext.refreshAllObjects()
@@ -398,10 +405,17 @@ struct SpotDetailView: View {
                 Button(action: {
                     toggleFavorite()
                 }) {
-                    Image(systemName: isFavorited ? "heart.fill" : "heart")
-                        .font(.system(size: 24))
-                        .foregroundColor(isFavorited ? ThemeManager.SwiftUIColors.coral : .gray)
+                    Group {
+                        if isFavoriteBusy {
+                            ProgressView()
+                        } else {
+                            Image(systemName: isFavorited ? "heart.fill" : "heart")
+                        }
+                    }
+                    .font(.system(size: 24))
+                    .foregroundColor(isFavorited ? ThemeManager.SwiftUIColors.coral : .gray)
                 }
+                .disabled(isFavoriteBusy)
                 .accessibilityLabel(isFavorited ? "Remove from favorites" : "Add to favorites")
                 .accessibilityHint("Tap to \(isFavorited ? "unfavorite" : "favorite") this spot")
             }
@@ -419,6 +433,27 @@ struct SpotDetailView: View {
                     .font(ThemeManager.SwiftUIFonts.caption)
                     .foregroundColor(ThemeManager.SwiftUIColors.coral)
                     .accessibilityLabel("\(distanceString) from current location")
+            }
+            
+            if let phone = spot.phone, !phone.isEmpty,
+               let phoneURL = URL(string: "tel:\(phone.filter { $0.isNumber || $0 == "+" })") {
+                Link(destination: phoneURL) {
+                    Label(phone, systemImage: "phone.fill")
+                        .font(ThemeManager.SwiftUIFonts.caption)
+                        .foregroundColor(ThemeManager.SwiftUIColors.coral)
+                }
+                .accessibilityLabel("Call \(phone)")
+            }
+            
+            if let website = spot.website,
+               let websiteURL = URL(string: website),
+               websiteURL.scheme?.hasPrefix("http") == true {
+                Link(destination: websiteURL) {
+                    Label("Website", systemImage: "globe")
+                        .font(ThemeManager.SwiftUIFonts.caption)
+                        .foregroundColor(ThemeManager.SwiftUIColors.coral)
+                }
+                .accessibilityLabel("Open website")
             }
         }
     }
@@ -490,64 +525,140 @@ struct SpotDetailView: View {
                 .accessibilityAddTraits(.isHeader)
             
             VStack(alignment: .leading, spacing: ThemeManager.Spacing.sm) {
-                // WiFi Rating
-                HStack {
-                    Image(systemName: "wifi")
-                        .foregroundColor(ThemeManager.SwiftUIColors.coral)
-                        .accessibilityHidden(true)
-                    Text("WiFi:")
-                        .font(ThemeManager.SwiftUIFonts.body)
-                        .foregroundColor(ThemeManager.SwiftUIColors.mocha)
-                    WiFiSignalBars(rating: Int(spot.wifiRating))
-                        .accessibilityLabel("WiFi rating: \(spot.wifiRating) out of 5")
-                }
-                
-                // Noise Rating
-                HStack {
-                    Image(systemName: "speaker.wave.2.fill")
-                        .foregroundColor(ThemeManager.SwiftUIColors.coral)
-                        .accessibilityHidden(true)
-                    Text("Noise:")
-                        .font(ThemeManager.SwiftUIFonts.body)
-                        .foregroundColor(ThemeManager.SwiftUIColors.mocha)
-                    Text(spot.noiseRating)
-                        .font(ThemeManager.SwiftUIFonts.body)
-                        .foregroundColor(ThemeManager.SwiftUIColors.mocha)
-                        .accessibilityLabel("Noise level: \(spot.noiseRating)")
-                }
-                
-                // Outlets
-                HStack {
-                    Image(systemName: "powerplug.fill")
-                        .foregroundColor(ThemeManager.SwiftUIColors.coral)
-                        .accessibilityHidden(true)
-                    Text("Outlets:")
-                        .font(ThemeManager.SwiftUIFonts.body)
-                        .foregroundColor(ThemeManager.SwiftUIColors.mocha)
-                    Text(spot.outlets ? "Available" : "Not Available")
-                        .font(ThemeManager.SwiftUIFonts.body)
-                        .foregroundColor(ThemeManager.SwiftUIColors.mocha)
-                        .accessibilityLabel("Outlets: \(spot.outlets ? "Available" : "Not Available")")
-                }
-                
-                // Overall Rating
-                HStack {
-                    Text("Overall:")
-                        .font(ThemeManager.SwiftUIFonts.body)
-                        .foregroundColor(ThemeManager.SwiftUIColors.mocha)
-                    HStack(spacing: 2) {
-                        ForEach(0..<5) { index in
-                            Image(systemName: index < Int(overallRating) ? "star.fill" : "star")
-                                .foregroundColor(ThemeManager.SwiftUIColors.coral)
+                if let stars = spot.communityStarRating {
+                    HStack {
+                        Text("Community rating:")
+                            .font(ThemeManager.SwiftUIFonts.body)
+                            .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+                        HStack(spacing: 2) {
+                            ForEach(0..<5) { index in
+                                Image(systemName: index < Int(stars) ? "star.fill" : "star")
+                                    .foregroundColor(ThemeManager.SwiftUIColors.coral)
+                            }
                         }
+                        Text(String(format: "%.1f", stars))
+                            .font(ThemeManager.SwiftUIFonts.body)
+                            .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+                        Text("(\(spot.communityRatingCount))")
+                            .font(ThemeManager.SwiftUIFonts.caption)
+                            .foregroundColor(.gray)
                     }
-                    Text(String(format: "%.1f", overallRating))
-                        .font(ThemeManager.SwiftUIFonts.body)
-                        .foregroundColor(ThemeManager.SwiftUIColors.mocha)
-                        .accessibilityLabel("Overall rating: \(String(format: "%.1f", overallRating)) out of 5 stars")
+                    .accessibilityLabel("Community rating \(String(format: "%.1f", stars)) from \(spot.communityRatingCount) reviews")
+                } else {
+                    Text("No community star rating yet—be the first to rate this spot.")
+                        .font(ThemeManager.SwiftUIFonts.caption)
+                        .foregroundColor(ThemeManager.SwiftUIColors.coral)
+                }
+                
+                if spot.wifiKnown {
+                    HStack {
+                        Image(systemName: "wifi")
+                            .foregroundColor(ThemeManager.SwiftUIColors.coral)
+                            .accessibilityHidden(true)
+                        Text("WiFi:")
+                            .font(ThemeManager.SwiftUIFonts.body)
+                            .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+                        WiFiSignalBars(rating: Int(spot.wifiRating))
+                            .accessibilityLabel("WiFi rating: \(spot.wifiRating) out of 5")
+                    }
+                }
+                
+                if spot.noiseKnown {
+                    HStack {
+                        Image(systemName: "speaker.wave.2.fill")
+                            .foregroundColor(ThemeManager.SwiftUIColors.coral)
+                            .accessibilityHidden(true)
+                        Text("Noise:")
+                            .font(ThemeManager.SwiftUIFonts.body)
+                            .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+                        Text(spot.noiseRating)
+                            .font(ThemeManager.SwiftUIFonts.body)
+                            .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+                            .accessibilityLabel("Noise level: \(spot.noiseRating)")
+                    }
+                }
+                
+                if spot.outletsKnown {
+                    HStack {
+                        Image(systemName: outletsDetailIcon)
+                            .foregroundColor(ThemeManager.SwiftUIColors.coral)
+                            .accessibilityHidden(true)
+                        Text("Outlets:")
+                            .font(ThemeManager.SwiftUIFonts.body)
+                            .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+                        Text(spot.outletsDisplayLabel)
+                            .font(ThemeManager.SwiftUIFonts.body)
+                            .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+                            .accessibilityLabel("Outlets: \(spot.outletsDisplayLabel)")
+                    }
                 }
             }
+            
+            communityActionsSection
         }
+    }
+    
+    private var showReportButton: Bool {
+        usesCommunityBackend && spot.supabaseId != nil
+    }
+    
+    private var communityActionsFooter: String? {
+        guard usesCommunityBackend else { return nil }
+        return "Incorrect info? Report a problem—you can refresh amenities from the web there before submitting."
+    }
+    
+    private var communityActionsSection: some View {
+        VStack(alignment: .leading, spacing: ThemeManager.Spacing.sm) {
+            if showReportButton {
+                Button {
+                    showingReportProblem = true
+                } label: {
+                    Label("Report a Problem", systemImage: "exclamationmark.bubble")
+                        .font(ThemeManager.SwiftUIFonts.body)
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(ThemeManager.SwiftUIColors.mocha)
+                .accessibilityHint("Flag incorrect information or update this spot from web sources.")
+            }
+            
+            if let footer = communityActionsFooter {
+                Text(footer)
+                    .font(ThemeManager.SwiftUIFonts.caption)
+                    .foregroundColor(ThemeManager.SwiftUIColors.mocha.opacity(0.75))
+            }
+        }
+    }
+    
+    @MainActor
+    private func submitProblemReport(category: SpotProblemCategory, details: String) async throws {
+        guard let spotId = spot.supabaseId.flatMap(UUID.init(uuidString:)) else {
+            throw SupabaseUGCError.problemReportFailed("This spot is not linked to the community catalog.")
+        }
+        try await SupabaseUGCService.shared.submitProblemReport(
+            spotId: spotId,
+            category: category,
+            details: details
+        )
+    }
+    
+    @MainActor
+    private func researchSpotFromWeb(fromProblemReport: Bool) async throws {
+        guard let spotId = spot.supabaseId.flatMap(UUID.init(uuidString:)) else {
+            throw SupabaseCommunityError.researchFailed(
+                "This spot is not linked to the community catalog yet."
+            )
+        }
+        
+        let updated = try await SupabaseCommunityService.shared.researchSpot(
+            spotId: spotId,
+            fromProblemReport: fromProblemReport
+        )
+        _ = try SupabaseCommunityService.shared.syncToCoreData(remoteSpots: [updated])
+        viewContext.refresh(spot, mergeChanges: true)
+        viewContext.refreshAllObjects()
+        CommunitySpotNotifications.postSpotUpdated(supabaseId: spotId.uuidString)
+        logger.info("Web research completed for \(spot.name)")
     }
     
     // MARK: - User Rating Form Section
@@ -577,20 +688,102 @@ struct SpotDetailView: View {
     
     // MARK: - Tips Section
     
-    private var tipsSection: some View {
-        VStack(alignment: .leading, spacing: ThemeManager.Spacing.sm) {
-            Text("Tips & Insights")
-                .font(ThemeManager.SwiftUIFonts.headline)
-                .foregroundColor(ThemeManager.SwiftUIColors.mocha)
-                .accessibilityAddTraits(.isHeader)
+    private var outletsDetailIcon: String {
+        guard spot.outletsKnown, let outlets = spot.outlets else { return "questionmark.circle" }
+        return outlets.boolValue ? "powerplug.fill" : "powerplug"
+    }
+    
+    // MARK: - Community Reviews
+    
+    @ViewBuilder
+    private var communityReviewsSection: some View {
+        let reviews = spot.sortedCommunityReviews
+        if !reviews.isEmpty {
+            VStack(alignment: .leading, spacing: ThemeManager.Spacing.sm) {
+                Text("Community Reviews")
+                    .font(ThemeManager.SwiftUIFonts.headline)
+                    .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+                    .accessibilityAddTraits(.isHeader)
+                
+                Text("Star ratings and optional notes from people who worked here.")
+                    .font(ThemeManager.SwiftUIFonts.caption)
+                    .foregroundColor(ThemeManager.SwiftUIColors.mocha.opacity(0.75))
+                
+                ForEach(reviews, id: \.objectID) { review in
+                    communityReviewRow(review)
+                }
+            }
+        }
+    }
+    
+    private func communityReviewRow(_ review: UserRating) -> some View {
+        VStack(alignment: .leading, spacing: ThemeManager.Spacing.xs) {
+            HStack(spacing: 2) {
+                ForEach(1...5, id: \.self) { value in
+                    Image(systemName: value <= Int(review.stars) ? "star.fill" : "star")
+                        .font(.caption)
+                        .foregroundColor(ThemeManager.SwiftUIColors.coral)
+                }
+                Spacer()
+                Text(review.oneLineSummary)
+                    .font(ThemeManager.SwiftUIFonts.caption)
+                    .foregroundColor(ThemeManager.SwiftUIColors.mocha.opacity(0.8))
+            }
             
-            Text(spot.tips)
-                .font(ThemeManager.SwiftUIFonts.body)
-                .foregroundColor(ThemeManager.SwiftUIColors.mocha)
-                .padding()
-                .background(ThemeManager.SwiftUIColors.latte)
-                .cornerRadius(8)
-                .accessibilityLabel("Tips: \(spot.tips)")
+            if review.hasTips {
+                Text(review.formattedTip)
+                    .font(ThemeManager.SwiftUIFonts.body)
+                    .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+            }
+        }
+        .padding()
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(ThemeManager.SwiftUIColors.latte)
+        .cornerRadius(8)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(
+            review.hasTips
+                ? "\(Int(review.stars)) stars. \(review.oneLineSummary). \(review.formattedTip)"
+                : "\(Int(review.stars)) stars. \(review.oneLineSummary)"
+        )
+    }
+    
+    private var enrichmentSourceCaption: String? {
+        switch spot.enrichmentSource {
+        case "community_reviews":
+            return "Summary from aggregated community reviews"
+        case "web_search":
+            return "Summary from web research"
+        case "baseline":
+            return "Not yet researched—add a review or report a problem to update from the web"
+        default:
+            return nil
+        }
+    }
+    
+    @ViewBuilder
+    private var spotSummarySection: some View {
+        if spot.showsSpotSummary {
+            VStack(alignment: .leading, spacing: ThemeManager.Spacing.sm) {
+                Text("Spot Summary")
+                    .font(ThemeManager.SwiftUIFonts.headline)
+                    .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+                    .accessibilityAddTraits(.isHeader)
+                
+                if let caption = enrichmentSourceCaption {
+                    Text(caption)
+                        .font(ThemeManager.SwiftUIFonts.caption)
+                        .foregroundColor(ThemeManager.SwiftUIColors.coral)
+                }
+                
+                Text(spot.tips)
+                    .font(ThemeManager.SwiftUIFonts.body)
+                    .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+                    .padding()
+                    .background(ThemeManager.SwiftUIColors.latte)
+                    .cornerRadius(8)
+                    .accessibilityLabel("Spot summary: \(spot.tips)")
+            }
         }
     }
     
@@ -598,10 +791,14 @@ struct SpotDetailView: View {
     
     private var userTipsSection: some View {
         VStack(alignment: .leading, spacing: ThemeManager.Spacing.sm) {
-            Text("User Tips")
+            Text("Quick Tips")
                 .font(ThemeManager.SwiftUIFonts.headline)
                 .foregroundColor(ThemeManager.SwiftUIColors.mocha)
                 .accessibilityAddTraits(.isHeader)
+            
+            Text("Short standalone tips—separate from star ratings and review notes above.")
+                .font(ThemeManager.SwiftUIFonts.caption)
+                .foregroundColor(ThemeManager.SwiftUIColors.mocha.opacity(0.75))
             
             // Tip submission form
             VStack(alignment: .leading, spacing: ThemeManager.Spacing.sm) {
@@ -661,10 +858,6 @@ struct SpotDetailView: View {
                     .cornerRadius(8)
                     .accessibilityLabel("No user tips available")
             }
-        }
-        .onTapGesture {
-            // Dismiss keyboard when tapping anywhere outside the text field
-            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
         }
     }
     
@@ -767,56 +960,106 @@ struct SpotDetailView: View {
     }
     
     private var ratingFormView: some View {
-        Form {
-                Section("WiFi Quality") {
-                    VStack(alignment: .leading) {
-                        HStack {
-                            Text("Rating: \(Int(wifiRating))")
-                                .font(ThemeManager.SwiftUIFonts.body)
-                            Spacer()
-                            Text("\(Int(wifiRating))/5")
-                                .font(ThemeManager.SwiftUIFonts.caption)
-                                .foregroundColor(.gray)
+        let canSubmit = overallStarRating >= 1
+        
+        return Form {
+            Section {
+                Text("Your star rating is separate from WiFi, noise, and outlets—those help other workers, but only stars appear on the list.")
+                    .font(ThemeManager.SwiftUIFonts.caption)
+                    .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+            }
+            
+            Section("Your overall rating") {
+                VStack(alignment: .leading) {
+                    HStack {
+                        Text("Stars: \(Int(overallStarRating))")
+                            .font(ThemeManager.SwiftUIFonts.body)
+                        Spacer()
+                        HStack(spacing: 2) {
+                            ForEach(1...5, id: \.self) { value in
+                                Image(systemName: value <= Int(overallStarRating) ? "star.fill" : "star")
+                                    .foregroundColor(ThemeManager.SwiftUIColors.coral)
+                                    .onTapGesture { overallStarRating = Double(value) }
+                            }
                         }
-                        Slider(value: $wifiRating, in: 0...5, step: 1)
-                            .tint(ThemeManager.SwiftUIColors.coral)
                     }
-                }
-                
-                Section("Noise Level") {
-                    Picker("Noise Level", selection: $noiseLevel) {
-                        Text("Low").tag("Low")
-                        Text("Medium").tag("Medium")
-                        Text("High").tag("High")
-                    }
-                    .pickerStyle(.segmented)
-                }
-                
-                Section("Outlets") {
-                    Toggle("Outlets Available", isOn: $outletsAvailable)
+                    Slider(value: $overallStarRating, in: 1...5, step: 1)
                         .tint(ThemeManager.SwiftUIColors.coral)
                 }
-                
-                Section("Tips") {
-                    TextField("Share your tips about this spot...", text: $userTip, axis: .vertical)
-                        .lineLimit(3...6)
+            }
+            
+            Section("WiFi at this spot") {
+                VStack(alignment: .leading) {
+                    HStack {
+                        Text("Rating: \(Int(wifiRating))")
+                            .font(ThemeManager.SwiftUIFonts.body)
+                        Spacer()
+                        Text("\(Int(wifiRating))/5")
+                            .font(ThemeManager.SwiftUIFonts.caption)
+                            .foregroundColor(.gray)
+                    }
+                    Slider(value: $wifiRating, in: 1...5, step: 1)
+                        .tint(ThemeManager.SwiftUIColors.coral)
                 }
             }
-            .navigationTitle("Rate This Spot")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Cancel") {
-                        showingRatingForm = false
-                    }
+            
+            Section("Noise at this spot") {
+                Picker("Noise Level", selection: $noiseLevel) {
+                    Text("Low").tag("Low")
+                    Text("Medium").tag("Medium")
+                    Text("High").tag("High")
                 }
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Submit") {
-                        submitRating()
-                    }
-                    .disabled(userTip.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .pickerStyle(.segmented)
+            }
+            
+            Section("Outlets") {
+                Toggle("Outlets Available", isOn: $outletsAvailable)
+                    .tint(ThemeManager.SwiftUIColors.coral)
+            }
+            
+            Section {
+                TextField("Optional note with your review…", text: $userTip, axis: .vertical)
+                    .lineLimit(3...6)
+            } header: {
+                Text("Notes (optional)")
+            } footer: {
+                Text("Appears under Community Reviews on this spot. For short standalone tips, use Quick Tips on the detail page.")
+            }
+        }
+        .scrollDismissesKeyboard(.interactively)
+        .dismissKeyboardOnTap()
+        .navigationTitle("Rate This Spot")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button("Cancel") {
+                    showingRatingForm = false
                 }
             }
+            ToolbarItem(placement: .confirmationAction) {
+                Button("Submit") {
+                    submitRating()
+                }
+                .disabled(!canSubmit)
+            }
+        }
+        .safeAreaInset(edge: .bottom) {
+            VStack(spacing: ThemeManager.Spacing.sm) {
+                Button {
+                    submitRating()
+                } label: {
+                    Text("Submit Rating")
+                        .font(ThemeManager.SwiftUIFonts.headline)
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(ThemeManager.SwiftUIColors.coral)
+                .disabled(!canSubmit)
+            }
+            .padding(.horizontal, ThemeManager.Spacing.md)
+            .padding(.vertical, ThemeManager.Spacing.sm)
+            .background(ThemeManager.SwiftUIColors.latte)
+        }
     }
     
     private var photoViewer: some View {
@@ -867,48 +1110,6 @@ struct SpotDetailView: View {
             let kilometers = distance / 1000
             return String(format: "%.1f km", kilometers)
         }
-    }
-    
-    private var overallRating: Double {
-        // Calculate overall rating using the same logic as SpotViewModel
-        let wifiNormalized = Double(spot.wifiRating)
-        
-        let noiseInverted: Double
-        switch spot.noiseRating.lowercased() {
-        case "low": noiseInverted = 5.0
-        case "medium": noiseInverted = 3.0
-        case "high": noiseInverted = 1.0
-        default: noiseInverted = 3.0
-        }
-        
-        let outlets = spot.outlets ? 5.0 : 1.0
-        let aggregateRating = min(5.0, (wifiNormalized + noiseInverted + outlets) / 3.0)
-        
-        // Calculate user rating average
-        guard let userRatings = spot.userRatings, userRatings.count > 0 else {
-            return round(aggregateRating * 2.0) / 2.0
-        }
-        
-        let totalRating = userRatings.reduce(into: 0.0) { sum, rating in
-            guard let userRating = rating as? UserRating else { return }
-            
-            let userWifi = Double(userRating.wifi)
-            let userNoise: Double
-            switch userRating.noise.lowercased() {
-            case "low": userNoise = 5.0
-            case "medium": userNoise = 3.0
-            case "high": userNoise = 1.0
-            default: userNoise = 3.0
-            }
-            let userOutlets = userRating.plugs ? 5.0 : 1.0
-            
-            let userAverage = min(5.0, (userWifi + userNoise + userOutlets) / 3.0)
-            sum += userAverage
-        }
-        
-        let userRatingAverage = min(5.0, totalRating / Double(userRatings.count))
-        let combinedRating = (aggregateRating * 0.5) + (userRatingAverage * 0.5)
-        return round(min(5.0, combinedRating) * 2.0) / 2.0
     }
     
     /**
@@ -972,8 +1173,56 @@ struct SpotDetailView: View {
     }
     
     @MainActor
+    private func refreshSpotEnrichmentFromCommunity(spotId: UUID) async {
+        do {
+            if let updated = try await SupabaseCommunityService.shared.enrichSpotFromCommunity(spotId: spotId) {
+                _ = try SupabaseCommunityService.shared.syncToCoreData(remoteSpots: [updated])
+                viewContext.refreshAllObjects()
+                logger.info("Refreshed community enrichment for \(spot.name)")
+            }
+        } catch {
+            logger.warning("Spot re-enrichment failed: \(error.localizedDescription)")
+        }
+    }
+    
+    @MainActor
+    private func applyReviewToCoreData(
+        stars: Int,
+        wifi: Int,
+        noise: String,
+        plugs: Bool,
+        tip: String,
+        supabaseId: String?
+    ) throws {
+        let rating: UserRating
+        if let supabaseId {
+            let request = UserRating.fetchRequest()
+            request.predicate = NSPredicate(format: "supabaseId == %@", supabaseId)
+            request.fetchLimit = 1
+            if let existing = try viewContext.fetch(request).first {
+                rating = existing
+            } else {
+                rating = UserRating(context: viewContext)
+                rating.supabaseId = supabaseId
+                rating.spot = spot
+            }
+        } else {
+            rating = UserRating(context: viewContext)
+            rating.spot = spot
+        }
+        
+        rating.stars = Int16(stars)
+        rating.wifi = Int16(wifi)
+        rating.noise = noise
+        rating.plugs = plugs
+        rating.tip = tip
+    }
+    
+    @MainActor
     private func submitRatingToCommunity() async {
         let trimmedTip = userTip.trimmingCharacters(in: .whitespacesAndNewlines)
+        let stars = max(1, min(5, Int(overallStarRating)))
+        let wifi = max(1, min(5, Int(wifiRating)))
         
         do {
             if usesCommunityBackend {
@@ -987,35 +1236,52 @@ struct SpotDetailView: View {
                 let remote = try await SupabaseUGCService.shared.upsertReview(
                     spotId: spotId,
                     userId: userId,
-                    wifi: Int(wifiRating),
+                    stars: stars,
+                    wifi: wifi,
                     noise: noiseLevel,
                     plugs: outletsAvailable,
                     tip: trimmedTip
                 )
                 
-                let userRating = UserRating(context: viewContext)
-                userRating.wifi = Int16(wifiRating)
-                userRating.noise = noiseLevel
-                userRating.plugs = outletsAvailable
-                userRating.tip = trimmedTip
-                userRating.supabaseId = remote.id.uuidString
-                userRating.spot = spot
+                try applyReviewToCoreData(
+                    stars: stars,
+                    wifi: wifi,
+                    noise: noiseLevel,
+                    plugs: outletsAvailable,
+                    tip: trimmedTip,
+                    supabaseId: remote.id.uuidString
+                )
             } else {
-                let userRating = UserRating(context: viewContext)
-                userRating.wifi = Int16(wifiRating)
-                userRating.noise = noiseLevel
-                userRating.plugs = outletsAvailable
-                userRating.tip = trimmedTip
-                userRating.spot = spot
+                try applyReviewToCoreData(
+                    stars: stars,
+                    wifi: wifi,
+                    noise: noiseLevel,
+                    plugs: outletsAvailable,
+                    tip: trimmedTip,
+                    supabaseId: nil
+                )
             }
             
             try viewContext.save()
+            CommunitySpotNotifications.postSpotUpdated(supabaseId: spot.supabaseId)
+            
+            if usesCommunityBackend, let spotId = spot.supabaseId.flatMap(UUID.init(uuidString:)) {
+                await refreshSpotEnrichmentFromCommunity(spotId: spotId)
+                await SupabaseUGCService.shared.refreshCommunityContent(for: spot)
+                viewContext.refresh(spot, mergeChanges: true)
+                viewContext.refreshAllObjects()
+            }
+            
             logger.info("Successfully saved user rating for \(spot.name)")
             showingRatingForm = false
             resetRatingForm()
+        } catch SupabaseAuthError.communitySignInRequired {
+            showingRatingForm = false
+            pendingCommunityAction = .addRating
+            showingCommunitySignIn = true
         } catch {
             logger.error("Failed to save user rating: \(error.localizedDescription)")
-            showError("Failed to save rating: \(error.localizedDescription)")
+            showError(UserFacingError.message(for: error, context: .saveRating) ?? "Your rating couldn’t be saved. Please try again.")
         }
     }
     
@@ -1059,9 +1325,12 @@ struct SpotDetailView: View {
             
             try viewContext.save()
             logger.info("Successfully saved photo for \(spot.name)")
+        } catch SupabaseAuthError.communitySignInRequired {
+            pendingCommunityAction = .uploadPhoto
+            showingCommunitySignIn = true
         } catch {
             logger.error("Failed to save photo: \(error.localizedDescription)")
-            showError("Failed to save photo: \(error.localizedDescription)")
+            showError(UserFacingError.message(for: error, context: .savePhoto) ?? "Your photo couldn’t be uploaded. Please try again.")
         }
     }
     
@@ -1216,6 +1485,7 @@ struct SpotDetailView: View {
     }
     
     private func resetRatingForm() {
+        overallStarRating = 4.0
         wifiRating = 3.0
         noiseLevel = "Medium"
         outletsAvailable = true
@@ -1338,9 +1608,12 @@ struct SpotDetailView: View {
             try viewContext.save()
             logger.info("Successfully submitted tip: \(trimmedText)")
             newTipText = ""
+        } catch SupabaseAuthError.communitySignInRequired {
+            pendingCommunityAction = .submitTip(trimmedText)
+            showingCommunitySignIn = true
         } catch {
             logger.error("Failed to submit tip: \(error.localizedDescription)")
-            showError("Failed to submit tip: \(error.localizedDescription)")
+            showError(UserFacingError.message(for: error, context: .saveTip) ?? "Your tip couldn’t be posted. Please try again.")
         }
     }
     
@@ -1618,13 +1891,14 @@ struct SpotDetailView_Previews: PreviewProvider {
         sampleSpot.longitude = -74.0060
         sampleSpot.wifiRating = 5
         sampleSpot.noiseRating = "Low"
-        sampleSpot.outlets = true
+        sampleSpot.outlets = NSNumber(value: true)
         sampleSpot.tips = "Great coffee and cozy atmosphere. Perfect for remote work."
         sampleSpot.lastSeeded = Date()
         sampleSpot.cloudKitRecordID = "sample-record-id"
         
         // Add a sample user rating
         let sampleUserRating = UserRating(context: viewContext)
+        sampleUserRating.stars = 5
         sampleUserRating.wifi = 4
         sampleUserRating.noise = "Low"
         sampleUserRating.plugs = true

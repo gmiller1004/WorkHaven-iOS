@@ -236,7 +236,7 @@ class SpotDiscoveryService: ObservableObject {
         }
         
         // Enrich via Supabase edge function (community) or local Grok fallback
-        await updateDiscoveryState(progress: "Enriching locations with AI...")
+        await updateDiscoveryState(progress: "Saving spots to community catalog...")
         let enrichedSpots: [Spot]
         if AppConfig.isSupabaseConfigured {
             enrichedSpots = try await enrichViaSupabase(from: allMapItems)
@@ -298,17 +298,10 @@ class SpotDiscoveryService: ObservableObject {
      */
     private func enrichViaSupabase(from mapItems: [(MKMapItem, String)]) async throws -> [Spot] {
         let payloads = mapItems.map { mapItem, category in
-            DiscoverLocationPayload(
-                name: mapItem.name ?? "Unknown Location",
-                address: mapItem.placemark.title ?? "Unknown Address",
-                latitude: mapItem.placemark.coordinate.latitude,
-                longitude: mapItem.placemark.coordinate.longitude,
-                type: getSpotType(for: category)
-            )
+            discoverLocationPayload(from: mapItem, searchCategory: category)
         }
         
-        // Smaller batches avoid edge function timeouts and large JSON payloads.
-        let batchSize = 8
+        let batchSize = 25
         var allRemoteSpots: [RemoteSpot] = []
         
         for batchStart in stride(from: 0, to: payloads.count, by: batchSize) {
@@ -318,7 +311,7 @@ class SpotDiscoveryService: ObservableObject {
             let totalBatches = Int(ceil(Double(payloads.count) / Double(batchSize)))
             
             await updateDiscoveryState(
-                progress: "Enriching community spots (\(batchIndex)/\(totalBatches))..."
+                progress: "Saving community spots (\(batchIndex)/\(totalBatches))..."
             )
             
             let remoteBatch = try await SupabaseCommunityService.shared.discoverAndEnrich(locations: batch)
@@ -350,125 +343,12 @@ class SpotDiscoveryService: ObservableObject {
     // MARK: - Grok API Integration
     
     /**
-     * Enriches map items with AI-generated data and creates/updates Spot entities
-     * Batches Grok API calls (10 spots per request, max 2 concurrent) to reduce latency.
-     * Only calls Grok API for new or stale spots.
+     * Local-only fallback when Supabase is not configured.
+     * Uses conservative type baselines only—no Grok guessing from name/address.
      */
     private func enrichAndCreateSpots(from mapItems: [(MKMapItem, String)]) async throws -> [Spot] {
-        guard let apiKey = getGrokAPIKey(), !apiKey.isEmpty else {
-            logger.warning("GROK_API_KEY not found in build configuration")
-            return try await createSpotsWithDefaults(from: mapItems)
-        }
-        
-        var enrichedSpots: [Spot] = []
-        let batchSize = 10 // 10 spots per request
-        let maxConcurrent = 2 // Max 2 concurrent requests
-        
-        // Create batches
-        let batches = stride(from: 0, to: mapItems.count, by: batchSize).map { batchStart in
-            let batchEnd = min(batchStart + batchSize, mapItems.count)
-            return Array(mapItems[batchStart..<batchEnd])
-        }
-        
-        // Process batches with max 2 concurrent requests
-        await withTaskGroup(of: Result<[Spot], Error>.self) { group in
-            var activeTasks = 0
-            var batchIndex = 0
-            
-            // Start initial tasks (up to maxConcurrent)
-            while activeTasks < maxConcurrent && batchIndex < batches.count {
-                let batch = batches[batchIndex]
-                let currentBatchIndex = batchIndex
-                group.addTask {
-                    await self.updateDiscoveryState(progress: "Enriching batch \(currentBatchIndex + 1)/\(batches.count)...")
-                    
-                    do {
-                        return .success(try await self.enrichBatchSpots(batch, apiKey: apiKey))
-                    } catch {
-                        self.logger.error("Failed to enrich batch \(currentBatchIndex + 1): \(error.localizedDescription)")
-                        Task { @MainActor in
-                            self.errorMessage = "Failed to enrich batch: \(error.localizedDescription)"
-                        }
-                        
-                        // Create spots with defaults if batch API fails
-                        do {
-                            var fallbackSpots: [Spot] = []
-                            for (mapItem, category) in batch {
-                                let defaultSpot = try await self.createSpotWithDefaults(mapItem: mapItem, category: category)
-                                fallbackSpots.append(defaultSpot)
-                            }
-                            return .success(fallbackSpots)
-                        } catch {
-                            return .failure(error)
-                        }
-                    }
-                }
-                activeTasks += 1
-                batchIndex += 1
-            }
-            
-            // Process remaining batches as tasks complete
-            while batchIndex < batches.count {
-                if let result = await group.next() {
-                    switch result {
-                    case .success(let batchSpots):
-                        enrichedSpots.append(contentsOf: batchSpots)
-                    case .failure(let error):
-                        logger.error("Batch processing failed: \(error.localizedDescription)")
-                    }
-                    activeTasks -= 1
-                    
-                    // Start next batch if available
-                    if batchIndex < batches.count {
-                        let batch = batches[batchIndex]
-                        let currentBatchIndex = batchIndex
-                        group.addTask {
-                            await self.updateDiscoveryState(progress: "Enriching batch \(currentBatchIndex + 1)/\(batches.count)...")
-                            
-                            do {
-                                return .success(try await self.enrichBatchSpots(batch, apiKey: apiKey))
-                            } catch {
-                                self.logger.error("Failed to enrich batch \(currentBatchIndex + 1): \(error.localizedDescription)")
-                                Task { @MainActor in
-                                    self.errorMessage = "Failed to enrich batch: \(error.localizedDescription)"
-                                }
-                                
-                                // Create spots with defaults if batch API fails
-                                do {
-                                    var fallbackSpots: [Spot] = []
-                                    for (mapItem, category) in batch {
-                                        let defaultSpot = try await self.createSpotWithDefaults(mapItem: mapItem, category: category)
-                                        fallbackSpots.append(defaultSpot)
-                                    }
-                                    return .success(fallbackSpots)
-                                } catch {
-                                    return .failure(error)
-                                }
-                            }
-                        }
-                        activeTasks += 1
-                        batchIndex += 1
-                    }
-                }
-            }
-            
-            // Collect remaining results
-            for await result in group {
-                switch result {
-                case .success(let batchSpots):
-                    enrichedSpots.append(contentsOf: batchSpots)
-                case .failure(let error):
-                    logger.error("Batch processing failed: \(error.localizedDescription)")
-                }
-            }
-        }
-        
-        // Deduplicate and save to Core Data
-        let deduplicatedSpots = deduplicateSpots(enrichedSpots)
-        await saveSpotsToCoreData(deduplicatedSpots)
-        
-        await updateDiscoveredCount(deduplicatedSpots.count)
-        return deduplicatedSpots
+        logger.info("Using local baseline enrichment (Supabase discover-enrich not configured)")
+        return try await createSpotsWithDefaults(from: mapItems)
     }
     
     /**
@@ -476,14 +356,17 @@ class SpotDiscoveryService: ObservableObject {
      * Processes up to 10 spots in a single API call to reduce latency
      */
     private func enrichBatchSpots(_ mapItems: [(MKMapItem, String)], apiKey: String) async throws -> [Spot] {
-        let spotDescriptions = mapItems.map { (mapItem, _) in
+        let spotDescriptionsWithType = mapItems.map { (mapItem, category) in
             let name = mapItem.name ?? "Unknown Location"
             let address = mapItem.placemark.title ?? "Unknown Address"
-            return "\(name) at \(address)"
+            let type = getSpotType(for: category)
+            return "\(name) at \(address) [type: \(type)]"
         }.joined(separator: ", ")
         
         let prompt = """
-        For these locations: \(spotDescriptions), estimate WiFi rating (1-5 stars), noise level (Low/Medium/High), plugs (Yes/No), and a short tip for each. 
+        For these locations: \(spotDescriptionsWithType), estimate WiFi rating (1-5 stars), noise level (Low/Medium/High), plugs/outlets (Yes/No), and a short tip for each.
+        
+        Venue-type rules: parks are outdoor—plugs should almost always be No and WiFi usually 1-3 unless an indoor café is named; libraries/coffee/coworking may have plugs and stronger WiFi.
         
         IMPORTANT: Respond ONLY with a valid JSON array in this exact format:
         [{"name": "Exact Location Name", "wifi": 4, "noise": "Medium", "plugs": true, "tip": "Great coffee and atmosphere"}]
@@ -566,12 +449,16 @@ class SpotDiscoveryService: ObservableObject {
     /**
      * Enriches a single spot using the Grok API
      */
-    private func enrichSingleSpot(mapItem: MKMapItem, apiKey: String) async throws -> Spot {
+    private func enrichSingleSpot(mapItem: MKMapItem, category: String, apiKey: String) async throws -> Spot {
         let name = mapItem.name ?? "Unknown Location"
         let address = mapItem.placemark.title ?? "Unknown Address"
         
+        let spotType = getSpotType(for: category)
         let prompt = """
-        For \(name) at \(address), estimate WiFi rating (1-5 stars), noise level (Low/Medium/High), plugs (Yes/No), and a short tip based on typical similar venues. Respond in JSON: {"wifi": number, "noise": string, "plugs": bool, "tip": string}.
+        Venue type: \(spotType). Location: \(name) at \(address).
+        Estimate WiFi (1-5), noise (Low/Medium/High), plugs for laptops (true/false), and a short tip.
+        For parks: plugs should be false and WiFi usually low (1-3) unless clearly an indoor venue.
+        Respond in JSON: {"wifi": number, "noise": string, "plugs": bool, "tip": string}.
         """
         
         let requestBody = GrokRequest(
@@ -668,7 +555,7 @@ class SpotDiscoveryService: ObservableObject {
                 let spotData = try JSONDecoder().decode(SpotData.self, from: data)
                 spot.wifiRating = Int16(spotData.wifi)
                 spot.noiseRating = spotData.noise
-                spot.outlets = spotData.plugs
+                spot.outlets = NSNumber(value: spotData.plugs)
                 spot.tips = spotData.tip
             } catch {
                 logger.warning("Failed to parse enriched data, using defaults: \(error.localizedDescription)")
@@ -703,13 +590,33 @@ class SpotDiscoveryService: ObservableObject {
         spot.type = spotType
         logger.info("Set type: \(spotType) for \(spot.name)")
         
-        // Use batch data
-        spot.wifiRating = Int16(batchData.wifi)
-        spot.noiseRating = batchData.noise
-        spot.outlets = batchData.plugs
-        spot.tips = batchData.tip
+        // Use batch data with type-aware adjustments
+        let adjusted = adjustedEnrichment(for: spotType, wifi: batchData.wifi, noise: batchData.noise, plugs: batchData.plugs, tip: batchData.tip)
+        spot.wifiRating = Int16(adjusted.wifi)
+        spot.noiseRating = adjusted.noise
+        spot.outlets = NSNumber(value: adjusted.plugs)
+        spot.tips = adjusted.tip
         
         return spot
+    }
+    
+    private struct AdjustedEnrichment {
+        let wifi: Int
+        let noise: String
+        let plugs: Bool
+        let tip: String
+    }
+    
+    private func adjustedEnrichment(for type: String, wifi: Int, noise: String, plugs: Bool, tip: String) -> AdjustedEnrichment {
+        if type == "park" {
+            return AdjustedEnrichment(
+                wifi: min(wifi, 3),
+                noise: noise,
+                plugs: false,
+                tip: tip
+            )
+        }
+        return AdjustedEnrichment(wifi: wifi, noise: noise, plugs: plugs, tip: tip)
     }
     
     /**
@@ -760,10 +667,30 @@ class SpotDiscoveryService: ObservableObject {
      * Sets default values for a spot
      */
     private func setDefaultValues(for spot: Spot) {
-        spot.wifiRating = 3
-        spot.noiseRating = "Medium"
-        spot.outlets = false
-        spot.tips = "Auto-discovered"
+        spot.enrichmentSource = "baseline"
+        spot.outlets = nil
+        switch spot.type.lowercased() {
+        case "park":
+            spot.wifiRating = 2
+            spot.noiseRating = "Medium"
+            spot.tips = "Not yet rated by the community. Outdoor park—outlet availability unknown until reviewed."
+        case "library":
+            spot.wifiRating = 3
+            spot.noiseRating = "Low"
+            spot.tips = "Not yet rated by the community. Be the first to review WiFi, noise, and outlets."
+        case "coffee":
+            spot.wifiRating = 3
+            spot.noiseRating = "Medium"
+            spot.tips = "Not yet rated by the community. Be the first to review this café for remote work."
+        case "coworking":
+            spot.wifiRating = 3
+            spot.noiseRating = "Low"
+            spot.tips = "Not yet rated by the community. Be the first to review this space."
+        default:
+            spot.wifiRating = 3
+            spot.noiseRating = "Medium"
+            spot.tips = "Not yet rated—add a community review or report a problem to update from the web."
+        }
     }
     
     // MARK: - Utility Functions
@@ -785,6 +712,46 @@ class SpotDiscoveryService: ObservableObject {
         default:
             return "unknown"
         }
+    }
+    
+    private func discoverLocationPayload(
+        from mapItem: MKMapItem,
+        searchCategory: String
+    ) -> DiscoverLocationPayload {
+        let searchType = getSpotType(for: searchCategory)
+        let poiCategory = mapItem.pointOfInterestCategory?.rawValue
+        
+        return DiscoverLocationPayload(
+            name: mapItem.name ?? "Unknown Location",
+            address: formattedAddress(for: mapItem),
+            latitude: mapItem.placemark.coordinate.latitude,
+            longitude: mapItem.placemark.coordinate.longitude,
+            type: searchType,
+            phone: sanitizedPhone(mapItem.phoneNumber),
+            website: mapItem.url?.absoluteString,
+            poiCategory: poiCategory,
+            externalPlaceId: mapItem.identifier?.rawValue
+        )
+    }
+    
+    private func formattedAddress(for mapItem: MKMapItem) -> String {
+        if let title = mapItem.placemark.title, !title.isEmpty {
+            return title
+        }
+        let placemark = mapItem.placemark
+        let parts = [
+            placemark.subThoroughfare,
+            placemark.thoroughfare,
+            placemark.locality,
+            placemark.administrativeArea,
+            placemark.postalCode
+        ].compactMap { $0 }.filter { !$0.isEmpty }
+        return parts.isEmpty ? "Unknown Address" : parts.joined(separator: ", ")
+    }
+    
+    private func sanitizedPhone(_ phone: String?) -> String? {
+        guard let phone, !phone.isEmpty else { return nil }
+        return phone
     }
     
     /**

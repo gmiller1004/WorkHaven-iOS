@@ -16,6 +16,7 @@ struct RemoteSpotReview: Codable, Sendable, Identifiable {
     let wifi: Int
     let noise: String
     let plugs: Bool
+    let stars: Int?
     let tip: String
     let createdAt: Date?
 }
@@ -68,6 +69,7 @@ final class SupabaseUGCService {
     func upsertReview(
         spotId: UUID,
         userId: UUID,
+        stars: Int,
         wifi: Int,
         noise: String,
         plugs: Bool,
@@ -77,6 +79,7 @@ final class SupabaseUGCService {
         let payload = SpotReviewPayload(
             spotId: spotId,
             userId: userId,
+            stars: stars,
             wifi: wifi,
             noise: noise,
             plugs: plugs,
@@ -116,6 +119,7 @@ final class SupabaseUGCService {
             rating.wifi = Int16(review.wifi)
             rating.noise = review.noise
             rating.plugs = review.plugs
+            rating.stars = Int16(review.stars ?? 0)
             rating.tip = review.tip
         }
         
@@ -284,13 +288,70 @@ final class SupabaseUGCService {
             logger.warning("Failed to refresh community UGC: \(error.localizedDescription)")
         }
     }
+    
+    // MARK: - Problem reports
+    
+    func submitProblemReport(
+        spotId: UUID,
+        category: SpotProblemCategory,
+        details: String
+    ) async throws {
+        let auth = SupabaseAuthService.shared
+        await auth.ensureAnonymousSession()
+        
+        guard let userId = auth.userID else {
+            throw SupabaseUGCError.problemReportFailed(
+                "Could not start a session to submit your report. Try again."
+            )
+        }
+        
+        let client = try SupabaseClientProvider.shared.requireClient()
+        let payload = SpotProblemReportPayload(
+            spotId: spotId,
+            userId: userId,
+            category: category.rawValue,
+            details: details
+        )
+        
+        try await client
+            .from("spot_problem_reports")
+            .insert(payload)
+            .execute()
+        
+        logger.info("Submitted problem report for spot \(spotId.uuidString): \(category.rawValue)")
+    }
+}
+
+enum SupabaseUGCError: LocalizedError {
+    case problemReportFailed(String)
+    
+    var errorDescription: String? {
+        switch self {
+        case .problemReportFailed(let message):
+            return message
+        }
+    }
 }
 
 // MARK: - API payloads
 
+private struct SpotProblemReportPayload: Encodable, Sendable {
+    let spotId: UUID
+    let userId: UUID
+    let category: String
+    let details: String
+    
+    enum CodingKeys: String, CodingKey {
+        case spotId = "spot_id"
+        case userId = "user_id"
+        case category, details
+    }
+}
+
 private struct SpotReviewPayload: Encodable, Sendable {
     let spotId: UUID
     let userId: UUID
+    let stars: Int
     let wifi: Int
     let noise: String
     let plugs: Bool
@@ -299,7 +360,7 @@ private struct SpotReviewPayload: Encodable, Sendable {
     enum CodingKeys: String, CodingKey {
         case spotId = "spot_id"
         case userId = "user_id"
-        case wifi, noise, plugs, tip
+        case stars, wifi, noise, plugs, tip
     }
 }
 

@@ -165,12 +165,13 @@ extension PersistenceController {
         sampleSpot.longitude = -122.4194
         sampleSpot.wifiRating = 4
         sampleSpot.noiseRating = "Quiet"
-        sampleSpot.outlets = true
+        sampleSpot.outlets = NSNumber(value: true)
         sampleSpot.tips = "Great coffee and fast WiFi"
         sampleSpot.lastModified = Date()
         sampleSpot.cloudKitRecordID = "sample-record-id"
         
         let sampleRating = UserRating(context: context)
+        sampleRating.stars = 5
         sampleRating.wifi = 5
         sampleRating.noise = "Very Quiet"
         sampleRating.plugs = true

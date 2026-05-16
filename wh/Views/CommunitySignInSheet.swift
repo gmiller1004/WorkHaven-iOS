@@ -5,6 +5,7 @@
 
 import AuthenticationServices
 import SwiftUI
+import OSLog
 
 /// Prompts for Sign in with Apple before posting community content.
 struct CommunitySignInSheet: View {
@@ -17,6 +18,8 @@ struct CommunitySignInSheet: View {
     @State private var isSigningIn = false
     @State private var errorMessage: String?
     @State private var currentNonce: String?
+    
+    private let logger = Logger(subsystem: "com.nextsizzle.wh", category: "CommunitySignIn")
     
     var body: some View {
         NavigationStack {
@@ -44,6 +47,7 @@ struct CommunitySignInSheet: View {
                 }
                 
                 SignInWithAppleButton(.signIn) { request in
+                    errorMessage = nil
                     let nonce = SignInWithAppleHelper.makeNonce()
                     currentNonce = nonce
                     request.requestedScopes = [.fullName, .email]
@@ -84,7 +88,7 @@ struct CommunitySignInSheet: View {
                   let tokenData = credential.identityToken,
                   let idToken = String(data: tokenData, encoding: .utf8),
                   let nonce = currentNonce else {
-                errorMessage = "Sign in with Apple did not return a valid credential."
+                errorMessage = "We couldn’t complete sign in. Please try again."
                 return
             }
             
@@ -93,10 +97,10 @@ struct CommunitySignInSheet: View {
             }
             
         case .failure(let error):
-            if (error as NSError).code == ASAuthorizationError.canceled.rawValue {
-                return
+            logger.error("Sign in with Apple failed: \(error.localizedDescription)")
+            if let message = UserFacingError.message(for: error, context: .signInWithApple) {
+                errorMessage = message
             }
-            errorMessage = error.localizedDescription
         }
     }
     
@@ -109,7 +113,9 @@ struct CommunitySignInSheet: View {
             try await authService.signInWithApple(idToken: idToken, nonce: nonce)
             onSignedIn()
         } catch {
-            errorMessage = error.localizedDescription
+            logger.error("Supabase Apple sign-in failed: \(error.localizedDescription)")
+            errorMessage = UserFacingError.message(for: error, context: .signInWithApple)
+                ?? "We couldn’t sign you in. Please try again."
         }
     }
 }

@@ -25,6 +25,7 @@ struct SpotListView: View {
     @AppStorage("usesImperialUnits") private var usesImperialUnits: Bool = true
     @State private var showingError = false
     @State private var searchText = ""
+    @FocusState private var isSearchFieldFocused: Bool
     @State private var sortOption: SortOption = .distance
     
     private let logger = Logger(subsystem: "com.nextsizzle.wh", category: "SpotListView")
@@ -81,8 +82,8 @@ struct SpotListView: View {
             }
         case .rating:
             return filteredSpots.sorted { spot1, spot2 in
-                let rating1 = spotViewModel.calculateOverallRating(for: spot1)
-                let rating2 = spotViewModel.calculateOverallRating(for: spot2)
+                let rating1 = spotViewModel.communityStarRating(for: spot1) ?? -1
+                let rating2 = spotViewModel.communityStarRating(for: spot2) ?? -1
                 return rating1 > rating2
             }
         case .name:
@@ -180,6 +181,9 @@ struct SpotListView: View {
             }
         }
         .navigationViewStyle(StackNavigationViewStyle())
+        .onReceive(NotificationCenter.default.publisher(for: .communitySpotDidUpdate)) { _ in
+            spotViewModel.notifyCommunitySpotUpdated()
+        }
     }
     
     // MARK: - Views
@@ -190,9 +194,17 @@ struct SpotListView: View {
     private var spotsList: some View {
         List {
             ForEach(filteredAndSortedSpots, id: \.objectID) { spot in
-                NavigationLink(destination: SpotDetailView(spot: spot, locationService: locationService)) {
-                    SpotListRowView(spot: spot, userLocation: locationService.currentLocation, usesImperialUnits: usesImperialUnits)
+                NavigationLink {
+                    SpotDetailView(spot: spot, locationService: locationService)
+                } label: {
+                    SpotListRowView(
+                        spot: spot,
+                        userLocation: locationService.currentLocation,
+                        usesImperialUnits: usesImperialUnits
+                    )
+                    .id("\(spot.objectID.uriRepresentation())-\(spotViewModel.spotsListRevision)")
                 }
+                .buttonStyle(.plain)
                 .listRowBackground(ThemeManager.SwiftUIColors.latte)
                 .listRowSeparator(.hidden)
                 .listRowInsets(EdgeInsets(
@@ -204,6 +216,7 @@ struct SpotListView: View {
             }
         }
         .listStyle(PlainListStyle())
+        .scrollDismissesKeyboard(.interactively)
         .background(ThemeManager.SwiftUIColors.latte)
         .safeAreaInset(edge: .bottom) {
             // Add bottom padding to prevent content from going under tab bar
@@ -254,6 +267,9 @@ struct SpotListView: View {
                     .font(ThemeManager.SwiftUIFonts.body)
                     .foregroundColor(ThemeManager.SwiftUIColors.mocha)
                     .textFieldStyle(PlainTextFieldStyle())
+                    .focused($isSearchFieldFocused)
+                    .submitLabel(.search)
+                    .onSubmit { isSearchFieldFocused = false }
                     .accessibilityLabel("Search spots field")
                 
                 if !searchText.isEmpty {
@@ -503,12 +519,12 @@ struct CategoryToggleButton: View {
  * Individual spot row with comprehensive information display
  */
 public struct SpotListRowView: View {
-    public let spot: Spot
+    @ObservedObject public var spot: Spot
     public let userLocation: CLLocation?
     public let usesImperialUnits: Bool
     
     public init(spot: Spot, userLocation: CLLocation?, usesImperialUnits: Bool) {
-        self.spot = spot
+        self._spot = ObservedObject(wrappedValue: spot)
         self.userLocation = userLocation
         self.usesImperialUnits = usesImperialUnits
     }
@@ -531,10 +547,17 @@ public struct SpotListRowView: View {
         return distance
     }
     
-    private var overallRating: Double {
-        // Create a temporary SpotViewModel to access rating calculation methods
-        let tempViewModel = SpotViewModel()
-        return tempViewModel.calculateOverallRating(for: spot)
+    private var communityStarRating: Double? {
+        spot.communityStarRating
+    }
+    
+    @ViewBuilder
+    private var outletsListIcon: some View {
+        if spot.outletsKnown, let outlets = spot.outlets {
+            Image(systemName: outlets.boolValue ? "checkmark.circle.fill" : "xmark.circle.fill")
+                .font(.system(size: isIPad ? 14 : 12))
+                .foregroundColor(outlets.boolValue ? ThemeManager.SwiftUIColors.coral : .red.opacity(0.6))
+        }
     }
     
     /**
@@ -585,49 +608,51 @@ public struct SpotListRowView: View {
                         .font(ThemeManager.SwiftUIFonts.caption)
                         .foregroundColor(ThemeManager.SwiftUIColors.mocha.opacity(0.7))
                     
-                    // Overall rating with stars
-                    HStack(spacing: 2) {
-                        ForEach(0..<5) { index in
-                            Image(systemName: index < Int(overallRating) ? "star.fill" : "star")
-                                .font(.system(size: 12))
-                                .foregroundColor(ThemeManager.SwiftUIColors.coral)
+                    if let stars = communityStarRating {
+                        HStack(spacing: 2) {
+                            ForEach(0..<5) { index in
+                                Image(systemName: index < Int(stars) ? "star.fill" : "star")
+                                    .font(.system(size: 12))
+                                    .foregroundColor(ThemeManager.SwiftUIColors.coral)
+                            }
+                            Text(String(format: "%.1f", stars))
+                                .font(ThemeManager.SwiftUIFonts.caption)
+                                .foregroundColor(ThemeManager.SwiftUIColors.mocha.opacity(0.7))
                         }
-                        Text(String(format: "%.1f", overallRating))
-                            .font(ThemeManager.SwiftUIFonts.caption)
-                            .foregroundColor(ThemeManager.SwiftUIColors.mocha.opacity(0.7))
                     }
                 }
             }
             
             // Rating indicators with improved iPad layout
             HStack(spacing: isIPad ? ThemeManager.Spacing.lg : ThemeManager.Spacing.md) {
-                // WiFi rating
-                HStack(spacing: 4) {
-                    Image(systemName: "wifi")
-                        .font(.system(size: isIPad ? 16 : 14))
-                        .foregroundColor(ThemeManager.SwiftUIColors.mocha.opacity(0.6))
-                    
-                    WiFiSignalBars(rating: Int(spot.wifiRating))
+                if spot.wifiKnown {
+                    HStack(spacing: 4) {
+                        Image(systemName: "wifi")
+                            .font(.system(size: isIPad ? 16 : 14))
+                            .foregroundColor(ThemeManager.SwiftUIColors.mocha.opacity(0.6))
+                        
+                        WiFiSignalBars(rating: Int(spot.wifiRating))
+                    }
                 }
                 
-                // Noise rating
-                HStack(spacing: 4) {
-                    Image(systemName: "speaker.wave.2")
-                        .font(.system(size: isIPad ? 16 : 14))
-                        .foregroundColor(ThemeManager.SwiftUIColors.mocha.opacity(0.6))
-                    
-                    NoiseLevelIndicator(level: spot.noiseRating)
+                if spot.noiseKnown {
+                    HStack(spacing: 4) {
+                        Image(systemName: "speaker.wave.2")
+                            .font(.system(size: isIPad ? 16 : 14))
+                            .foregroundColor(ThemeManager.SwiftUIColors.mocha.opacity(0.6))
+                        
+                        NoiseLevelIndicator(level: spot.noiseRating)
+                    }
                 }
                 
-                // Outlets indicator
-                HStack(spacing: 4) {
-                    Image(systemName: "powerplug")
-                        .font(.system(size: isIPad ? 16 : 14))
-                        .foregroundColor(ThemeManager.SwiftUIColors.mocha.opacity(0.6))
-                    
-                    Image(systemName: spot.outlets ? "checkmark.circle.fill" : "xmark.circle.fill")
-                        .font(.system(size: isIPad ? 14 : 12))
-                        .foregroundColor(spot.outlets ? ThemeManager.SwiftUIColors.coral : .red.opacity(0.6))
+                if spot.outletsKnown {
+                    HStack(spacing: 4) {
+                        Image(systemName: "powerplug")
+                            .font(.system(size: isIPad ? 16 : 14))
+                            .foregroundColor(ThemeManager.SwiftUIColors.mocha.opacity(0.6))
+                        
+                        outletsListIcon
+                    }
                 }
                 
                 // Type icon for iPad (additional visual indicator)
@@ -675,13 +700,19 @@ public struct SpotListRowView: View {
      */
     private var accessibilityLabel: String {
         let distanceText = formattedDistance(spot: spot, from: userLocation)
-        let ratingText = String(format: "%.1f stars", overallRating)
-        let wifiText = "\(Int(spot.wifiRating)) out of 5 WiFi"
-        let noiseText = "\(spot.noiseRating) noise level"
-        let outletsText = spot.outlets ? "has outlets" : "no outlets"
+        let ratingText = communityStarRating.map { String(format: "%.1f stars", $0) } ?? "not yet rated"
+        let wifiText = spot.wifiKnown ? "\(Int(spot.wifiRating)) out of 5 WiFi" : ""
+        let noiseText = spot.noiseKnown ? "\(spot.noiseRating) noise level" : ""
+        let outletsText = spot.outletsKnown
+            ? (spot.hasOutlets ? "has outlets" : "no outlets")
+            : ""
         let typeText = spotTypeDescription
         
-        return "\(typeText), \(spot.name), \(distanceText), \(ratingText), \(wifiText), \(noiseText), \(outletsText)"
+        var parts = [typeText, spot.name, distanceText, ratingText]
+        if !wifiText.isEmpty { parts.append(wifiText) }
+        if !noiseText.isEmpty { parts.append(noiseText) }
+        if !outletsText.isEmpty { parts.append(outletsText) }
+        return parts.joined(separator: ", ")
     }
     
     /**

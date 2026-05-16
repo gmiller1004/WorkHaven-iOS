@@ -33,6 +33,9 @@ struct WorkHavenApp: App {
                 .environment(\.managedObjectContext, persistenceController.container.viewContext)
                 .task {
                     await SupabaseAuthService.shared.ensureAnonymousSession()
+                    if AppConfig.isSupabaseConfigured {
+                        try? await SupabaseFavoritesService.shared.syncFavoritesToCoreData()
+                    }
                 }
                 .onOpenURL { url in
                     handleUniversalLink(url)
@@ -40,6 +43,7 @@ struct WorkHavenApp: App {
                 .sheet(isPresented: $showingSpotDetail) {
                     if let spot = selectedSpot {
                         SpotDetailView(spot: spot, locationService: LocationService.shared)
+                            .dismissKeyboardOnTap()
                             .environment(\.managedObjectContext, persistenceController.container.viewContext)
                     }
                 }

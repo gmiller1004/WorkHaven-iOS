@@ -44,6 +44,9 @@ class SpotViewModel: ObservableObject {
     /// Selected categories for filtering spots (all default selected)
     @Published var selectedCategories: Set<String> = ["coffee", "park", "library", "coworking"]
     
+    /// Bumped when a spot's community data changes so list rows refresh.
+    @Published private(set) var spotsListRevision = 0
+    
     /// Core Data view context for UI operations
     var viewContext: NSManagedObjectContext {
         return persistenceController.container.viewContext
@@ -82,6 +85,12 @@ class SpotViewModel: ObservableObject {
          spotDiscoveryService: SpotDiscoveryService? = nil) {
         self.persistenceController = persistenceController
         self.spotDiscoveryService = spotDiscoveryService ?? SpotDiscoveryService()
+    }
+    
+    /// Forces list rows to re-read Core Data after a spot is updated in place.
+    func notifyCommunitySpotUpdated() {
+        persistenceController.container.viewContext.refreshAllObjects()
+        spotsListRevision += 1
     }
     
     // MARK: - Public Methods
@@ -156,23 +165,6 @@ class SpotViewModel: ObservableObject {
                 self.showEmptyState = self.spots.isEmpty
             }
         }
-    }
-    
-    /**
-     * Forces a refresh of spots by clearing cache and discovering new ones
-     * - Parameter near: The center point for spot discovery, or nil to refresh all spots
-     */
-    func refreshSpots(near: CLLocation?) async {
-        let location = near ?? CLLocation(latitude: 37.7749, longitude: -122.4194)
-        logger.info("Force refreshing spots near \(location.coordinate.latitude), \(location.coordinate.longitude)")
-        
-        // Clear existing spots and cache
-        spots = []
-        cachedSpots = []
-        lastCacheUpdate = nil
-        errorMessage = nil
-        
-        await discoverNewSpots(near: location)
     }
     
     /**
@@ -472,6 +464,8 @@ class SpotViewModel: ObservableObject {
             
             logger.info("Fetched \(nearbySpots.count) existing spots from Core Data within radius")
             
+            normalizeOutletStates(for: nearbySpots)
+            
             // Debug: Log some details about fetched spots
             if !nearbySpots.isEmpty {
                 logger.info("Sample spot: \(nearbySpots.first?.name ?? "Unknown") - Last seeded: \(nearbySpots.first?.lastSeeded.description ?? "Unknown")")
@@ -577,6 +571,19 @@ class SpotViewModel: ObservableObject {
     private struct CommunityLoadResult {
         let spots: [Spot]
         let remoteCount: Int
+    }
+    
+    private func normalizeOutletStates(for spots: [Spot]) {
+        let context = persistenceController.container.viewContext
+        for spot in spots {
+            spot.normalizeOutletUnknownState()
+        }
+        guard context.hasChanges else { return }
+        do {
+            try context.save()
+        } catch {
+            logger.warning("Failed to save outlet normalization: \(error.localizedDescription)")
+        }
     }
     
     private func loadCommunitySpotsIfAvailable(near location: CLLocation, existing: [Spot]) async -> CommunityLoadResult {
@@ -693,7 +700,9 @@ class SpotViewModel: ObservableObject {
     private func sortSpots(_ spots: [Spot], from userLocation: CLLocation?) -> [Spot] {
         guard let userLocation = userLocation else {
             // If user location is not available, sort only by overall rating
-            return spots.sorted { calculateOverallRating(for: $0) > calculateOverallRating(for: $1) }
+            return spots.sorted {
+                (communityStarRating(for: $0) ?? -1) > (communityStarRating(for: $1) ?? -1)
+            }
         }
         
         return spots.sorted { spot1, spot2 in
@@ -709,113 +718,21 @@ class SpotViewModel: ObservableObject {
             }
             
             // If distances are similar, sort by overall rating (higher rating first)
-            let rating1 = calculateOverallRating(for: spot1)
-            let rating2 = calculateOverallRating(for: spot2)
+            let rating1 = communityStarRating(for: spot1) ?? -1
+            let rating2 = communityStarRating(for: spot2) ?? -1
             
             return rating1 > rating2
         }
     }
     
-    /**
-     * Calculates the overall rating for a spot using the specified formula
-     * Formula: min(5, 50% aggregate rating + 50% user rating average)
-     * - Parameter spot: The spot to calculate rating for
-     * - Returns: Overall rating (0.0 to 5.0), capped at 5 stars
-     */
+    /// Community star average from user reviews only; nil when no rated reviews exist.
+    public func communityStarRating(for spot: Spot) -> Double? {
+        SpotRatingCalculator.communityStarRating(for: spot)
+    }
+    
+    /// Legacy alias used by notifications and share flows.
     public func calculateOverallRating(for spot: Spot) -> Double {
-        // Calculate aggregate rating (50% weight)
-        let aggregateRating = calculateAggregateRating(for: spot)
-        
-        // Calculate user rating average (50% weight)
-        let userRatingAverage = calculateUserRatingAverage(for: spot)
-        
-        // If no user ratings, fallback to aggregate rating
-        if userRatingAverage == 0 {
-            return aggregateRating
-        }
-        
-        // Combine with 50/50 weighting and cap at 5 stars
-        let combinedRating = (aggregateRating * 0.5) + (userRatingAverage * 0.5)
-        return min(5.0, combinedRating)
-    }
-    
-    /**
-     * Calculates the aggregate rating based on WiFi, noise, and outlets
-     * Formula: min(5, (wifiNormalized + noiseInverted + outlets) / 3), rounded to 0.5
-     * - Parameter spot: The spot to calculate rating for
-     * - Returns: Aggregate rating (0.0 to 5.0), capped at 5 stars, rounded to 0.5
-     */
-    private func calculateAggregateRating(for spot: Spot) -> Double {
-        // WiFi rating (normalized to 0-5 scale)
-        let wifiNormalized = Double(spot.wifiRating)
-        
-        // Noise rating (Low=5, Medium=3, High=1)
-        let noiseInverted: Double
-        switch spot.noiseRating.lowercased() {
-        case "low":
-            noiseInverted = 5.0
-        case "medium":
-            noiseInverted = 3.0
-        case "high":
-            noiseInverted = 1.0
-        default:
-            noiseInverted = 3.0 // Default to medium
-        }
-        
-        // Outlets rating (Yes=5, No=1)
-        let outlets = spot.outlets ? 5.0 : 1.0
-        
-        // Calculate average and cap at 5
-        let average = (wifiNormalized + noiseInverted + outlets) / 3.0
-        let capped = min(5.0, average)
-        
-        // Round to nearest 0.5
-        return round(capped * 2.0) / 2.0
-    }
-    
-    /**
-     * Calculates the average user rating for a spot
-     * - Parameter spot: The spot to calculate rating for
-     * - Returns: Average user rating (0.0 to 5.0), capped at 5 stars, rounded to 0.5, or 0 if no ratings
-     */
-    private func calculateUserRatingAverage(for spot: Spot) -> Double {
-        guard let userRatings = spot.userRatings, userRatings.count > 0 else {
-            return 0.0
-        }
-        
-        let totalRating = userRatings.reduce(into: 0.0) { sum, rating in
-            // Cast NSSet.Element to UserRating
-            guard let userRating = rating as? UserRating else { return }
-            
-            // Calculate individual user rating using same formula as aggregate
-            let wifiNormalized = Double(userRating.wifi)
-            
-            let noiseInverted: Double
-            switch userRating.noise.lowercased() {
-            case "low":
-                noiseInverted = 5.0
-            case "medium":
-                noiseInverted = 3.0
-            case "high":
-                noiseInverted = 1.0
-            default:
-                noiseInverted = 3.0
-            }
-            
-            let outlets = userRating.plugs ? 5.0 : 1.0
-            
-            // Calculate average and cap at 5
-            let average = (wifiNormalized + noiseInverted + outlets) / 3.0
-            let capped = min(5.0, average)
-            
-            sum += capped
-        }
-        
-        let average = totalRating / Double(userRatings.count)
-        let capped = min(5.0, average)
-        
-        // Round to nearest 0.5
-        return round(capped * 2.0) / 2.0
+        communityStarRating(for: spot) ?? 0
     }
     
     /**
@@ -829,11 +746,10 @@ class SpotViewModel: ObservableObject {
         
         for spot in spots {
             // Recalculate the overall rating using the updated formula
-            let newOverallRating = calculateOverallRating(for: spot)
-            let aggregateRating = calculateAggregateRating(for: spot)
-            let userRatingAverage = calculateUserRatingAverage(for: spot)
-            
-            logger.debug("Rating for \(spot.name): Overall=\(String(format: "%.2f", newOverallRating)), Aggregate=\(String(format: "%.2f", aggregateRating)), UserAvg=\(String(format: "%.2f", userRatingAverage))")
+            let stars = communityStarRating(for: spot)
+            logger.debug(
+                "Rating for \(spot.name): community stars=\(stars.map { String(format: "%.2f", $0) } ?? "none")"
+            )
         }
         
         logger.info("Rating refresh completed for \(spots.count) spots")
@@ -857,7 +773,7 @@ class SpotViewModel: ObservableObject {
         var notificationsScheduled = 0
         
         for spot in spots {
-            let overallRating = calculateOverallRating(for: spot)
+            guard let overallRating = communityStarRating(for: spot) else { continue }
             
             // Only schedule notifications for spots with rating > 4.0
             if overallRating > 4.0 {
@@ -1038,16 +954,12 @@ extension SpotViewModel {
      * - Parameter spot: Spot to test rating for
      */
     func debugRatingCalculation(for spot: Spot) {
-        let aggregateRating = calculateAggregateRating(for: spot)
-        let userRatingAverage = calculateUserRatingAverage(for: spot)
-        let overallRating = calculateOverallRating(for: spot)
-        
+        let stars = communityStarRating(for: spot)
         logger.debug("""
         Rating calculation for \(spot.name):
-        - Aggregate: \(String(format: "%.2f", aggregateRating))
-        - User Average: \(String(format: "%.2f", userRatingAverage))
-        - Overall: \(String(format: "%.2f", overallRating))
-        - User Ratings Count: \(self.getUserRatingCount(for: spot))
+        - Community stars: \(stars.map { String(format: "%.2f", $0) } ?? "none")
+        - Rated reviews: \(spot.communityRatingCount)
+        - WiFi known: \(spot.wifiKnown), noise known: \(spot.noiseKnown)
         """)
     }
     

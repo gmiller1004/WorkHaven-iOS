@@ -13,7 +13,7 @@ import OSLog
 
 /**
  * SettingsView provides user controls for spot discovery preferences and debug options.
- * Features include auto-discovery toggle, manual regeneration, and data management tools.
+ * Features include auto-discovery toggle, notifications, and data management tools.
  * Uses ThemeManager for consistent coffee shop aesthetic and includes accessibility support.
  */
 struct SettingsView: View {
@@ -25,7 +25,6 @@ struct SettingsView: View {
     @AppStorage("NearbyAlertsEnabled") private var nearbyAlertsEnabled: Bool = false
     @AppStorage("CommunityUpdatesEnabled") private var communityUpdatesEnabled: Bool = false
     @StateObject private var locationService = LocationService.shared
-    @StateObject private var spotViewModel = SpotViewModel()
     @StateObject private var notificationManager = NotificationManager.shared
     @ObservedObject private var authService = SupabaseAuthService.shared
     
@@ -146,9 +145,6 @@ struct SettingsView: View {
                     communityAccountSection
                 }
                 
-                // Manual Actions Section
-                manualActionsSection
-                
                 // Privacy Section
                 privacySection
                 
@@ -165,6 +161,8 @@ struct SettingsView: View {
             }
             .padding(ThemeManager.Spacing.md)
         }
+        .scrollDismissesKeyboard(.interactively)
+        .dismissKeyboardOnTap()
     }
     
     // MARK: - Auto-Discover Section
@@ -309,7 +307,7 @@ struct SettingsView: View {
                             .font(ThemeManager.SwiftUIFonts.body)
                             .foregroundColor(ThemeManager.SwiftUIColors.mocha)
                         
-                        Text("Get updates on your favorited spots (new ratings, photos, tips)")
+                        Text("Get notified when someone adds a photo or tip to your favorited spots")
                             .font(ThemeManager.SwiftUIFonts.caption)
                             .foregroundColor(ThemeManager.SwiftUIColors.mocha.opacity(0.7))
                             .multilineTextAlignment(.leading)
@@ -412,40 +410,6 @@ struct SettingsView: View {
                     .fill(Color.white)
                     .shadow(color: ThemeManager.SwiftUIColors.mocha.opacity(0.1), radius: 2, x: 0, y: 1)
             )
-        }
-    }
-    
-    // MARK: - Manual Actions Section
-    
-    private var manualActionsSection: some View {
-        VStack(alignment: .leading, spacing: ThemeManager.Spacing.md) {
-            Text("Manual Actions")
-                .font(ThemeManager.SwiftUIFonts.headline)
-                .foregroundColor(ThemeManager.SwiftUIColors.mocha)
-            
-            VStack(spacing: ThemeManager.Spacing.sm) {
-                // Regenerate Now Button
-                Button(action: {
-                    Task {
-                        await regenerateSpots()
-                    }
-                }) {
-                    HStack {
-                        Image(systemName: "arrow.clockwise")
-                        Text("Regenerate Now")
-                    }
-                    .font(ThemeManager.SwiftUIFonts.body)
-                    .foregroundColor(ThemeManager.SwiftUIColors.mocha)
-                    .frame(maxWidth: .infinity)
-                    .padding(ThemeManager.Spacing.md)
-                    .background(
-                        RoundedRectangle(cornerRadius: ThemeManager.CornerRadius.medium)
-                            .fill(ThemeManager.SwiftUIColors.coral)
-                    )
-                }
-                .accessibilityLabel("Regenerate spots now")
-                .disabled(spotViewModel.isSeeding)
-            }
         }
     }
     
@@ -746,9 +710,8 @@ struct SettingsView: View {
             notificationManager.requestAuthorization { granted in
                 Task { @MainActor in
                     if granted {
-                        // Subscribe to CloudKit updates for favorited spots
-                        await self.subscribeToCommunityUpdatesForFavoritedSpots()
-                        self.logger.info("Community updates enabled and subscribed")
+                        await FavoriteActivityMonitor.shared.checkForUpdates()
+                        self.logger.info("Favorite spot updates enabled")
                     } else {
                         self.logger.warning("Notification permission denied, disabling community updates")
                         self.communityUpdatesEnabled = false
@@ -758,27 +721,7 @@ struct SettingsView: View {
                 }
             }
         } else {
-            // Unsubscribe from all community updates when disabled
-            unsubscribeFromAllCommunityUpdates()
-            logger.info("Community updates disabled")
-        }
-    }
-    
-    /**
-     * Regenerates spots using current location
-     */
-    private func regenerateSpots() async {
-        guard let location = locationService.currentLocation else {
-            errorMessage = "Current location not available. Please enable location services."
-            showingError = true
-            return
-        }
-        
-        await spotViewModel.refreshSpots(near: location)
-        
-        if let error = spotViewModel.errorMessage {
-            errorMessage = error
-            showingError = true
+            logger.info("Favorite spot updates disabled")
         }
     }
     

@@ -34,6 +34,7 @@ struct ContentView: View {
     
     // Track if initial load has been performed to avoid redundant calls
     @State private var hasPerformedInitialLoad = false
+    @Environment(\.scenePhase) private var scenePhase
     
     // Alert state for location errors
     @State private var showingLocationError = false
@@ -70,6 +71,15 @@ struct ContentView: View {
                 .accessibilityLabel("Map tab")
                 .tag(1)
             
+            // MARK: - Favorites Tab
+            FavoritesListView()
+                .environment(\.managedObjectContext, viewContext)
+                .tabItem {
+                    Label("Favorites", systemImage: "heart.fill")
+                }
+                .accessibilityLabel("Favorites tab")
+                .tag(2)
+
             // MARK: - Settings Tab
             SettingsView()
                 .environment(\.managedObjectContext, viewContext)
@@ -77,7 +87,7 @@ struct ContentView: View {
                     Label("Settings", systemImage: "gear")
                 }
                 .accessibilityLabel("Settings tab")
-                .tag(2)
+                .tag(3)
         }
         .accentColor(ThemeManager.SwiftUIColors.coral)
         .onAppear {
@@ -111,6 +121,15 @@ struct ContentView: View {
             if errorMessage != nil {
                 showingLocationError = true
             }
+        }
+        .onChange(of: scenePhase) { phase in
+            guard phase == .active else { return }
+            Task {
+                await syncFavoritesAndCheckActivity()
+            }
+        }
+        .task {
+            await syncFavoritesAndCheckActivity()
         }
         .alert("Location Error", isPresented: $showingLocationError) {
             Button("OK", role: .cancel) {
@@ -154,98 +173,187 @@ struct ContentView: View {
             await spotViewModel.loadSpots(near: location)
         }
     }
+
+    private func syncFavoritesAndCheckActivity() async {
+        guard AppConfig.isSupabaseConfigured else { return }
+        await SupabaseAuthService.shared.ensureAnonymousSession()
+        do {
+            try await SupabaseFavoritesService.shared.syncFavoritesToCoreData()
+        } catch {
+            logger.warning("Favorites sync failed: \(error.localizedDescription)")
+        }
+        await FavoriteActivityMonitor.shared.checkForUpdates()
+    }
 }
 
 // MARK: - OnboardingView
 
 /**
- * OnboardingView provides a one-time permission request flow for new users.
- * Requests location and notification permissions with clear explanations.
- * Uses ThemeManager for consistent styling and includes accessibility support.
+ * OnboardingView introduces WorkHaven and requests permissions with clear context.
  */
 struct OnboardingView: View {
-    
-    // MARK: - Properties
     
     @Binding var isRequestingPermissions: Bool
     let onPermissionsGranted: () -> Void
     
-    @Environment(\.dismiss) private var dismiss
-    
-    // Logger for debugging
     private let logger = Logger(subsystem: "com.nextsizzle.wh", category: "OnboardingView")
     
-    // MARK: - Body
+    private static let privacyPolicyURL = URL(string: "https://nextsizzle.com/appfamily/workhaven/privacy")!
     
     var body: some View {
-        NavigationView {
-            VStack(spacing: ThemeManager.Spacing.lg) {
-                // MARK: - Header
-                VStack(spacing: ThemeManager.Spacing.md) {
-                    Image(systemName: "mappin.circle.fill")
-                        .font(.system(size: 60))
-                        .foregroundColor(ThemeManager.SwiftUIColors.coral)
-                        .accessibilityHidden(true)
-                    
-                    Text("Welcome to WorkHaven")
-                        .font(ThemeManager.SwiftUIFonts.title)
-                        .fontWeight(.bold)
-                        .foregroundColor(ThemeManager.SwiftUIColors.mocha)
-                        .multilineTextAlignment(.center)
-                    
-                    Text("Discover the best work spots near you")
-                        .font(ThemeManager.SwiftUIFonts.body)
-                        .foregroundColor(ThemeManager.SwiftUIColors.mocha)
-                        .multilineTextAlignment(.center)
+        VStack(spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: ThemeManager.Spacing.lg) {
+                    headerSection
+                    valuePropositionSection
+                    featuresSection
+                    permissionsSection
+                    privacySection
                 }
+                .padding(.horizontal, ThemeManager.Spacing.lg)
                 .padding(.top, ThemeManager.Spacing.xl)
-                
-                // MARK: - Permission Explanations
-                VStack(spacing: ThemeManager.Spacing.lg) {
-                    PermissionRowView(
-                        icon: "location.fill",
-                        title: "Location Access",
-                        description: "Find work spots near your current location and get accurate distances"
-                    )
-                    
-                    PermissionRowView(
-                        icon: "bell.fill",
-                        title: "Notifications",
-                        description: "Get notified about new work spots and updates"
-                    )
-                }
-                .padding(.horizontal, ThemeManager.Spacing.lg)
-                
-                Spacer()
-                
-                // MARK: - Action Buttons
-                VStack(spacing: ThemeManager.Spacing.md) {
-                    Button(action: requestPermissions) {
-                        HStack {
-                            if isRequestingPermissions {
-                                ProgressView()
-                                    .progressViewStyle(CircularProgressViewStyle(tint: ThemeManager.SwiftUIColors.latte))
-                                    .scaleEffect(0.8)
-                            }
-                            Text(isRequestingPermissions ? "Requesting Permissions..." : "Continue")
-                                .font(ThemeManager.SwiftUIFonts.button)
-                                .fontWeight(.semibold)
-                        }
-                        .foregroundColor(ThemeManager.SwiftUIColors.latte)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 50)
-                        .background(ThemeManager.SwiftUIColors.mocha)
-                        .cornerRadius(ThemeManager.CornerRadius.medium)
-                    }
-                    .disabled(isRequestingPermissions)
-                    .accessibilityLabel("Continue to request location and notification permissions")
-                }
-                .padding(.horizontal, ThemeManager.Spacing.lg)
-                .padding(.bottom, ThemeManager.Spacing.xl)
+                .padding(.bottom, ThemeManager.Spacing.md)
             }
-            .background(ThemeManager.SwiftUIColors.latte)
-            .navigationBarHidden(true)
+            .scrollDismissesKeyboard(.interactively)
+            
+            continueButtonBar
         }
+        .background(ThemeManager.SwiftUIColors.latte)
+        .dismissKeyboardOnTap()
+    }
+    
+    // MARK: - Sections
+    
+    private var headerSection: some View {
+        VStack(spacing: ThemeManager.Spacing.md) {
+            Image(systemName: "mappin.circle.fill")
+                .font(.system(size: 60))
+                .foregroundColor(ThemeManager.SwiftUIColors.coral)
+                .accessibilityHidden(true)
+            
+            Text("Welcome to WorkHaven")
+                .font(ThemeManager.SwiftUIFonts.title)
+                .fontWeight(.bold)
+                .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: .infinity)
+            
+            Text("Your guide to work-friendly cafés, libraries, parks, and co-working spaces—rated for WiFi, noise, outlets, and real-world tips from people who work there.")
+                .font(ThemeManager.SwiftUIFonts.body)
+                .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+                .multilineTextAlignment(.center)
+        }
+    }
+    
+    private var valuePropositionSection: some View {
+        OnboardingSectionCard(title: "Why WorkHaven?") {
+            Text("Remote work shouldn’t mean guessing whether a café has reliable WiFi or a quiet corner. WorkHaven surfaces spots near you with practical ratings so you can pick a place and get to work—not wander around hoping for an open outlet.")
+                .font(ThemeManager.SwiftUIFonts.body)
+                .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+    
+    private var featuresSection: some View {
+        OnboardingSectionCard(title: "What you’ll get") {
+            VStack(alignment: .leading, spacing: ThemeManager.Spacing.sm) {
+                OnboardingFeatureRow(
+                    icon: "wifi",
+                    text: "WiFi, noise, and outlet ratings for every spot"
+                )
+                OnboardingFeatureRow(
+                    icon: "map",
+                    text: "A map and list sorted by distance and quality"
+                )
+                OnboardingFeatureRow(
+                    icon: "lightbulb.fill",
+                    text: "Community tips from people who’ve actually worked there"
+                )
+                OnboardingFeatureRow(
+                    icon: "person.2.fill",
+                    text: "Browse freely—sign in with Apple only when you want to add a review, photo, or tip"
+                )
+            }
+        }
+    }
+    
+    private var permissionsSection: some View {
+        VStack(alignment: .leading, spacing: ThemeManager.Spacing.md) {
+            Text("A better experience with permissions")
+                .font(ThemeManager.SwiftUIFonts.headline)
+                .fontWeight(.semibold)
+                .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+            
+            PermissionRowView(
+                icon: "location.fill",
+                title: "Location (recommended)",
+                description: "We use your location only to find spots around you, sort by distance, and center the map. WorkHaven does not track you in the background for this—location is used while you use the app to discover and navigate to places."
+            )
+            
+            PermissionRowView(
+                icon: "bell.fill",
+                title: "Notifications (optional)",
+                description: "Optional alerts when great new spots appear nearby or when the community shares updates on places you care about. You can turn these off anytime in Settings."
+            )
+        }
+    }
+    
+    private var privacySection: some View {
+        OnboardingSectionCard(title: "Your privacy") {
+            VStack(alignment: .leading, spacing: ThemeManager.Spacing.sm) {
+                Text("WorkHaven is built to respect your data:")
+                    .font(ThemeManager.SwiftUIFonts.body)
+                    .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+                
+                OnboardingFeatureRow(
+                    icon: "lock.fill",
+                    text: "Browse spots and community content without creating an account"
+                )
+                OnboardingFeatureRow(
+                    icon: "apple.logo",
+                    text: "Sign in with Apple only when you choose to post a rating, photo, or tip"
+                )
+                OnboardingFeatureRow(
+                    icon: "hand.raised.fill",
+                    text: "We don’t sell your location or personal information"
+                )
+                
+                Link("Read our Privacy Policy", destination: Self.privacyPolicyURL)
+                    .font(ThemeManager.SwiftUIFonts.caption)
+                    .foregroundColor(ThemeManager.SwiftUIColors.coral)
+                    .padding(.top, ThemeManager.Spacing.xs)
+            }
+        }
+    }
+    
+    private var continueButtonBar: some View {
+        VStack(spacing: 0) {
+            Divider()
+                .overlay(ThemeManager.SwiftUIColors.mocha.opacity(0.15))
+            
+            Button(action: requestPermissions) {
+                HStack {
+                    if isRequestingPermissions {
+                        ProgressView()
+                            .progressViewStyle(CircularProgressViewStyle(tint: ThemeManager.SwiftUIColors.latte))
+                            .scaleEffect(0.8)
+                    }
+                    Text(isRequestingPermissions ? "Requesting Permissions..." : "Continue")
+                        .font(ThemeManager.SwiftUIFonts.button)
+                        .fontWeight(.semibold)
+                }
+                .foregroundColor(ThemeManager.SwiftUIColors.latte)
+                .frame(maxWidth: .infinity)
+                .frame(height: 50)
+                .background(ThemeManager.SwiftUIColors.mocha)
+                .cornerRadius(ThemeManager.CornerRadius.medium)
+            }
+            .disabled(isRequestingPermissions)
+            .accessibilityLabel("Continue to request location and notification permissions")
+            .padding(.horizontal, ThemeManager.Spacing.lg)
+            .padding(.vertical, ThemeManager.Spacing.md)
+        }
+        .background(ThemeManager.SwiftUIColors.latte)
     }
     
     // MARK: - Methods
@@ -281,12 +389,56 @@ struct OnboardingView: View {
     }
 }
 
+// MARK: - Onboarding helpers
+
+private struct OnboardingSectionCard<Content: View>: View {
+    let title: String
+    @ViewBuilder let content: Content
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: ThemeManager.Spacing.sm) {
+            Text(title)
+                .font(ThemeManager.SwiftUIFonts.headline)
+                .fontWeight(.semibold)
+                .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+            
+            content
+        }
+        .padding(ThemeManager.Spacing.md)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.white)
+        .cornerRadius(ThemeManager.CornerRadius.medium)
+        .shadow(
+            color: ThemeManager.SwiftUIColors.mocha.opacity(0.08),
+            radius: 4,
+            x: 0,
+            y: 2
+        )
+    }
+}
+
+private struct OnboardingFeatureRow: View {
+    let icon: String
+    let text: String
+    
+    var body: some View {
+        HStack(alignment: .top, spacing: ThemeManager.Spacing.sm) {
+            Image(systemName: icon)
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundColor(ThemeManager.SwiftUIColors.coral)
+                .frame(width: 22, alignment: .center)
+                .accessibilityHidden(true)
+            
+            Text(text)
+                .font(ThemeManager.SwiftUIFonts.body)
+                .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
 // MARK: - PermissionRowView
 
-/**
- * PermissionRowView displays a single permission request with icon and description.
- * Uses ThemeManager for consistent styling and includes accessibility support.
- */
 struct PermissionRowView: View {
     
     // MARK: - Properties
@@ -313,18 +465,20 @@ struct PermissionRowView: View {
                 
                 Text(description)
                     .font(ThemeManager.SwiftUIFonts.caption)
-                    .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+                    .foregroundColor(ThemeManager.SwiftUIColors.mocha.opacity(0.85))
                     .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             
             Spacer()
         }
         .padding(ThemeManager.Spacing.md)
-        .background(ThemeManager.SwiftUIColors.latte)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.white)
         .cornerRadius(ThemeManager.CornerRadius.small)
         .overlay(
             RoundedRectangle(cornerRadius: ThemeManager.CornerRadius.small)
-                .stroke(ThemeManager.SwiftUIColors.coral.opacity(0.3), lineWidth: 1)
+                .stroke(ThemeManager.SwiftUIColors.coral.opacity(0.25), lineWidth: 1)
         )
     }
 }

@@ -1,4 +1,12 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
+import {
+  baselineEnrichment,
+  enrichFromCommunityReviews,
+  mapKitTipsSuffix,
+  resolveTypeFromPoi,
+  type MapKitFields,
+  type SpotReviewRow,
+} from "../_shared/spot-enrichment.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -6,10 +14,9 @@ const corsHeaders = {
     "authorization, x-client-info, apikey, content-type",
 };
 
-const GROK_MODEL = "grok-4-1-fast-non-reasoning";
-const ENRICHMENT_STALE_DAYS = 7;
+const MIN_REVIEWS_FOR_COMMUNITY = 1;
 
-interface DiscoverLocation {
+interface DiscoverLocation extends MapKitFields {
   name: string;
   address: string;
   latitude: number;
@@ -18,14 +25,8 @@ interface DiscoverLocation {
 }
 
 interface DiscoverRequest {
-  locations: DiscoverLocation[];
-}
-
-interface GrokSpotData {
-  wifi: number;
-  noise: string;
-  plugs: boolean;
-  tip: string;
+  locations?: DiscoverLocation[];
+  spot_ids?: string[];
 }
 
 interface SpotRow {
@@ -35,11 +36,17 @@ interface SpotRow {
   latitude: number;
   longitude: number;
   type: string;
+  phone?: string | null;
+  website?: string | null;
+  poi_category?: string | null;
+  external_place_id?: string | null;
   wifi_rating: number;
   noise_rating: string;
-  outlets: boolean;
+  outlets: boolean | null;
   tips: string;
   enriched_at: string | null;
+  enrichment_source?: string;
+  enrichment_review_count?: number;
 }
 
 Deno.serve(async (req) => {
@@ -50,7 +57,6 @@ Deno.serve(async (req) => {
   try {
     const supabaseUrl = Deno.env.get("SUPABASE_URL");
     const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
-    const grokApiKey = Deno.env.get("GROK_API_KEY");
 
     if (!supabaseUrl || !serviceRoleKey) {
       throw new Error("Missing Supabase environment variables");
@@ -58,22 +64,19 @@ Deno.serve(async (req) => {
 
     const body = (await req.json()) as DiscoverRequest;
     const locations = body.locations ?? [];
-
-    if (locations.length === 0) {
-      return jsonResponse({ spots: [] });
-    }
+    const spotIds = body.spot_ids ?? [];
 
     const supabase = createClient(supabaseUrl, serviceRoleKey);
-    const staleBefore = new Date();
-    staleBefore.setDate(staleBefore.getDate() - ENRICHMENT_STALE_DAYS);
-
     const results: SpotRow[] = [];
 
     for (const location of locations) {
-      const spot = await findOrCreateSpot(supabase, location, grokApiKey, staleBefore);
-      if (spot) {
-        results.push(spot);
-      }
+      const spot = await findOrCreateSpot(supabase, location);
+      if (spot) results.push(spot);
+    }
+
+    for (const spotId of spotIds) {
+      const spot = await reEnrichFromReviews(supabase, spotId);
+      if (spot) results.push(spot);
     }
 
     return jsonResponse({ spots: results });
@@ -90,10 +93,7 @@ Deno.serve(async (req) => {
 function jsonResponse(payload: unknown, status = 200): Response {
   return new Response(JSON.stringify(payload), {
     status,
-    headers: {
-      ...corsHeaders,
-      "Content-Type": "application/json",
-    },
+    headers: { ...corsHeaders, "Content-Type": "application/json" },
   });
 }
 
@@ -101,55 +101,38 @@ function jsonResponse(payload: unknown, status = 200): Response {
 async function findOrCreateSpot(
   supabase: any,
   location: DiscoverLocation,
-  grokApiKey: string | undefined,
-  staleBefore: Date,
 ): Promise<SpotRow | null> {
+  const resolvedType = resolveTypeFromPoi(location.type, location.poi_category);
+  const mapKit: MapKitFields = {
+    phone: location.phone,
+    website: location.website,
+    poi_category: location.poi_category,
+    external_place_id: location.external_place_id,
+    type: resolvedType,
+  };
+
   const existing = await findExistingSpot(supabase, location);
 
   if (existing) {
-    const enrichedAt = existing.enriched_at
-      ? new Date(existing.enriched_at)
-      : null;
-
-    if (enrichedAt && enrichedAt >= staleBefore) {
-      return existing as SpotRow;
-    }
-
-    if (!grokApiKey) {
-      return existing as SpotRow;
-    }
-
-    const enrichment = await enrichWithGrok(
-      grokApiKey,
-      location.name,
-      location.address,
+    const updated = await updateMapKitFields(
+      supabase,
+      existing as SpotRow,
+      location,
+      resolvedType,
     );
-
-    const { data, error } = await supabase
-      .from("spots")
-      .update({
-        wifi_rating: enrichment.wifi,
-        noise_rating: enrichment.noise,
-        outlets: enrichment.plugs,
-        tips: enrichment.tip,
-        enriched_at: new Date().toISOString(),
-        type: location.type || existing.type,
-      })
-      .eq("id", existing.id)
-      .select()
-      .single();
-
-    if (error) {
-      console.error("Failed to refresh spot:", error.message);
-      return existing as SpotRow;
+    const reviews = await fetchReviewsForSpot(supabase, updated.id);
+    if (reviews.length >= MIN_REVIEWS_FOR_COMMUNITY) {
+      return await persistCommunityEnrichment(
+        supabase,
+        updated,
+        reviews,
+      );
     }
-
-    return data as SpotRow;
+    return updated;
   }
 
-  const enrichment = grokApiKey
-    ? await enrichWithGrok(grokApiKey, location.name, location.address)
-    : defaultEnrichment();
+  const baseline = baselineEnrichment(resolvedType);
+  const tips = baseline.tip + mapKitTipsSuffix(mapKit);
 
   const { data, error } = await supabase
     .from("spots")
@@ -158,12 +141,18 @@ async function findOrCreateSpot(
       address: location.address,
       latitude: location.latitude,
       longitude: location.longitude,
-      type: location.type,
-      wifi_rating: enrichment.wifi,
-      noise_rating: enrichment.noise,
-      outlets: enrichment.plugs,
-      tips: enrichment.tip,
+      type: resolvedType,
+      phone: location.phone ?? null,
+      website: location.website ?? null,
+      poi_category: location.poi_category ?? null,
+      external_place_id: location.external_place_id ?? null,
+      wifi_rating: baseline.wifi,
+      noise_rating: baseline.noise,
+      outlets: baseline.plugs,
+      tips,
       enriched_at: new Date().toISOString(),
+      enrichment_source: "baseline",
+      enrichment_review_count: 0,
     })
     .select()
     .single();
@@ -173,7 +162,130 @@ async function findOrCreateSpot(
     return null;
   }
 
+  console.log(`Created baseline spot ${location.name}`);
   return data as SpotRow;
+}
+
+// deno-lint-ignore no-explicit-any
+async function reEnrichFromReviews(
+  supabase: any,
+  spotId: string,
+): Promise<SpotRow | null> {
+  const { data, error } = await supabase
+    .from("spots")
+    .select("*")
+    .eq("id", spotId)
+    .single();
+
+  if (error || !data) {
+    console.error("Spot not found for re-enrich:", spotId, error?.message);
+    return null;
+  }
+
+  const spot = data as SpotRow;
+  const reviews = await fetchReviewsForSpot(supabase, spotId);
+  if (reviews.length < MIN_REVIEWS_FOR_COMMUNITY) {
+    return spot;
+  }
+
+  return await persistCommunityEnrichment(supabase, spot, reviews);
+}
+
+// deno-lint-ignore no-explicit-any
+async function updateMapKitFields(
+  supabase: any,
+  spot: SpotRow,
+  location: DiscoverLocation,
+  resolvedType: string,
+): Promise<SpotRow> {
+  const mapKit: MapKitFields = {
+    phone: location.phone ?? spot.phone,
+    website: location.website ?? spot.website,
+    poi_category: location.poi_category ?? spot.poi_category,
+    external_place_id: location.external_place_id ?? spot.external_place_id,
+    type: resolvedType,
+  };
+
+  let tips = spot.tips;
+  if (spot.enrichment_source === "baseline") {
+    const baseline = baselineEnrichment(resolvedType);
+    tips = baseline.tip + mapKitTipsSuffix(mapKit);
+  }
+
+  const { data, error } = await supabase
+    .from("spots")
+    .update({
+      type: resolvedType,
+      phone: mapKit.phone ?? null,
+      website: mapKit.website ?? null,
+      poi_category: mapKit.poi_category ?? null,
+      external_place_id: mapKit.external_place_id ?? null,
+      tips,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", spot.id)
+    .select()
+    .single();
+
+  if (error) {
+    console.error("Failed to update MapKit fields:", error.message);
+    return spot;
+  }
+
+  return data as SpotRow;
+}
+
+// deno-lint-ignore no-explicit-any
+async function persistCommunityEnrichment(
+  supabase: any,
+  spot: SpotRow,
+  reviews: SpotReviewRow[],
+): Promise<SpotRow> {
+  const enrichment = enrichFromCommunityReviews(reviews);
+
+  const { data, error } = await supabase
+    .from("spots")
+    .update({
+      wifi_rating: enrichment.wifi,
+      noise_rating: enrichment.noise,
+      outlets: enrichment.plugs,
+      tips: enrichment.tip,
+      enriched_at: new Date().toISOString(),
+      enrichment_source: "community_reviews",
+      enrichment_review_count: reviews.length,
+    })
+    .eq("id", spot.id)
+    .select()
+    .single();
+
+  if (error) {
+    console.error("Failed to persist community enrichment:", error.message);
+    return spot;
+  }
+
+  console.log(
+    `Enriched ${spot.name} from ${reviews.length} community review(s)`,
+  );
+  return data as SpotRow;
+}
+
+// deno-lint-ignore no-explicit-any
+async function fetchReviewsForSpot(
+  supabase: any,
+  spotId: string,
+): Promise<SpotReviewRow[]> {
+  const { data, error } = await supabase
+    .from("spot_reviews")
+    .select("wifi, noise, plugs, tip")
+    .eq("spot_id", spotId)
+    .order("updated_at", { ascending: false });
+
+  if (error) {
+    console.error("Failed to fetch reviews:", error.message);
+    return [];
+  }
+
+  return (data ?? []) as SpotReviewRow[];
 }
 
 // deno-lint-ignore no-explicit-any
@@ -218,83 +330,4 @@ async function findExistingSpot(
   }
 
   return null;
-}
-
-async function enrichWithGrok(
-  apiKey: string,
-  name: string,
-  address: string,
-): Promise<GrokSpotData> {
-  const prompt =
-    `For "${name}" at "${address}", estimate WiFi rating (1-5 stars), noise level (Low/Medium/High), plugs (Yes/No), and a short tip. ` +
-    `Respond ONLY with JSON: {"wifi": number, "noise": "Low"|"Medium"|"High", "plugs": boolean, "tip": string}`;
-
-  const response = await fetch("https://api.x.ai/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: GROK_MODEL,
-      messages: [{ role: "user", content: prompt }],
-      max_tokens: 200,
-      temperature: 0.3,
-    }),
-  });
-
-  if (!response.ok) {
-    console.error("Grok API error:", await response.text());
-    return defaultEnrichment();
-  }
-
-  const payload = await response.json();
-  const content = payload?.choices?.[0]?.message?.content;
-
-  if (!content || typeof content !== "string") {
-    return defaultEnrichment();
-  }
-
-  try {
-    const jsonText = extractJson(content);
-    const parsed = JSON.parse(jsonText) as GrokSpotData;
-    return {
-      wifi: clampWifi(parsed.wifi),
-      noise: normalizeNoise(parsed.noise),
-      plugs: Boolean(parsed.plugs),
-      tip: parsed.tip?.trim() || defaultEnrichment().tip,
-    };
-  } catch {
-    return defaultEnrichment();
-  }
-}
-
-function extractJson(content: string): string {
-  const start = content.indexOf("{");
-  const end = content.lastIndexOf("}");
-  if (start >= 0 && end > start) {
-    return content.slice(start, end + 1);
-  }
-  return content;
-}
-
-function defaultEnrichment(): GrokSpotData {
-  return {
-    wifi: 3,
-    noise: "Medium",
-    plugs: false,
-    tip: "Auto-discovered from Apple Maps",
-  };
-}
-
-function clampWifi(value: number): number {
-  if (!Number.isFinite(value)) return 3;
-  return Math.min(5, Math.max(1, Math.round(value)));
-}
-
-function normalizeNoise(value: string): string {
-  const lower = value?.toLowerCase() ?? "medium";
-  if (lower.includes("low")) return "Low";
-  if (lower.includes("high")) return "High";
-  return "Medium";
 }
