@@ -24,8 +24,11 @@ struct SpotDetailView: View {
     @ObservedObject var locationService: LocationService
     @AppStorage("usesImperialUnits") private var usesImperialUnits: Bool = true
     @StateObject private var notificationManager = NotificationManager.shared
+    @ObservedObject private var authService = SupabaseAuthService.shared
     
     @State private var showingMap = false
+    @State private var showingCommunitySignIn = false
+    @State private var pendingCommunityAction: PendingCommunityAction?
     @State private var showingImagePicker = false
     @State private var showingRatingForm = false
     @State private var showingError = false
@@ -62,6 +65,16 @@ struct SpotDetailView: View {
     @State private var loadingImages: Set<String> = []
     
     private let logger = Logger(subsystem: "com.nextsizzle.wh", category: "SpotDetailView")
+    
+    private var usesCommunityBackend: Bool {
+        AppConfig.isSupabaseConfigured && spot.supabaseId != nil
+    }
+    
+    private enum PendingCommunityAction {
+        case addRating
+        case uploadPhoto
+        case submitTip(String)
+    }
     
     // MARK: - Favorite Methods
     
@@ -283,6 +296,19 @@ struct SpotDetailView: View {
             .sheet(isPresented: $showingRatingForm) {
                 ratingFormView
             }
+            .sheet(isPresented: $showingCommunitySignIn) {
+                CommunitySignInSheet(
+                    featureTitle: communitySignInFeatureTitle,
+                    onSignedIn: {
+                        showingCommunitySignIn = false
+                        resumePendingCommunityAction()
+                    },
+                    onCancel: {
+                        showingCommunitySignIn = false
+                        pendingCommunityAction = nil
+                    }
+                )
+            }
             .fullScreenCover(isPresented: $showPhotoViewer) {
                 photoViewer
             }
@@ -305,13 +331,20 @@ struct SpotDetailView: View {
             .alert("Submit Tip", isPresented: $showTipConfirmation) {
                 Button("Cancel", role: .cancel) { }
                 Button("Submit", role: .none) {
-                    submitTip()
+                    let text = newTipText.trimmingCharacters(in: .whitespacesAndNewlines)
+                    promptForCommunityWriteIfNeeded(.submitTip(text)) {
+                        Task { await submitTip() }
+                    }
                 }
             } message: {
                 Text("Are you sure you want to submit this tip?")
             }
             .onAppear {
                 initializeFavoriteStatus()
+                Task {
+                    await SupabaseUGCService.shared.refreshCommunityContent(for: spot)
+                    viewContext.refreshAllObjects()
+                }
             }
         .sheet(isPresented: $showingShareSheet) {
             ActivityViewController(activityItems: shareItems)
@@ -465,13 +498,8 @@ struct SpotDetailView: View {
                     Text("WiFi:")
                         .font(ThemeManager.SwiftUIFonts.body)
                         .foregroundColor(ThemeManager.SwiftUIColors.mocha)
-                    HStack(spacing: 2) {
-                        ForEach(0..<5) { index in
-                            Image(systemName: index < Int(spot.wifiRating) ? "signal.3" : "signal.3")
-                                .foregroundColor(index < Int(spot.wifiRating) ? ThemeManager.SwiftUIColors.coral : .gray)
-                        }
-                    }
-                    .accessibilityLabel("WiFi rating: \(spot.wifiRating) out of 5")
+                    WiFiSignalBars(rating: Int(spot.wifiRating))
+                        .accessibilityLabel("WiFi rating: \(spot.wifiRating) out of 5")
                 }
                 
                 // Noise Rating
@@ -535,7 +563,9 @@ struct SpotDetailView: View {
                 Spacer()
                 
                 Button("Add Rating") {
-                    showingRatingForm = true
+                    promptForCommunityWriteIfNeeded(.addRating) {
+                        showingRatingForm = true
+                    }
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(ThemeManager.SwiftUIColors.mocha)
@@ -651,7 +681,9 @@ struct SpotDetailView: View {
                 Spacer()
                 
                 Button("Upload Photo") {
-                    showingImagePicker = true
+                    promptForCommunityWriteIfNeeded(.uploadPhoto) {
+                        showingImagePicker = true
+                    }
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(ThemeManager.SwiftUIColors.mocha)
@@ -934,15 +966,49 @@ struct SpotDetailView: View {
     }
     
     private func submitRating() {
-        let userRating = UserRating(context: viewContext)
-        userRating.wifi = Int16(wifiRating)
-        userRating.noise = noiseLevel
-        userRating.plugs = outletsAvailable
-        userRating.tip = userTip.trimmingCharacters(in: .whitespacesAndNewlines)
-        // UserRating doesn't have a timestamp property
-        userRating.spot = spot
+        Task {
+            await submitRatingToCommunity()
+        }
+    }
+    
+    @MainActor
+    private func submitRatingToCommunity() async {
+        let trimmedTip = userTip.trimmingCharacters(in: .whitespacesAndNewlines)
         
         do {
+            if usesCommunityBackend {
+                try authService.requireCommunityWriter()
+                guard let spotId = spot.supabaseId.flatMap(UUID.init(uuidString:)),
+                      let userId = authService.userID else {
+                    showError("This spot is not linked to the community catalog yet.")
+                    return
+                }
+                
+                let remote = try await SupabaseUGCService.shared.upsertReview(
+                    spotId: spotId,
+                    userId: userId,
+                    wifi: Int(wifiRating),
+                    noise: noiseLevel,
+                    plugs: outletsAvailable,
+                    tip: trimmedTip
+                )
+                
+                let userRating = UserRating(context: viewContext)
+                userRating.wifi = Int16(wifiRating)
+                userRating.noise = noiseLevel
+                userRating.plugs = outletsAvailable
+                userRating.tip = trimmedTip
+                userRating.supabaseId = remote.id.uuidString
+                userRating.spot = spot
+            } else {
+                let userRating = UserRating(context: viewContext)
+                userRating.wifi = Int16(wifiRating)
+                userRating.noise = noiseLevel
+                userRating.plugs = outletsAvailable
+                userRating.tip = trimmedTip
+                userRating.spot = spot
+            }
+            
             try viewContext.save()
             logger.info("Successfully saved user rating for \(spot.name)")
             showingRatingForm = false
@@ -954,15 +1020,43 @@ struct SpotDetailView: View {
     }
     
     private func savePhoto(_ image: UIImage) {
-        let photo = Photo(context: viewContext)
-        photo.timestamp = Date()
-        photo.spot = spot
-        photo.cloudKitRecordID = ""
-        
-        // Set the image which will trigger CloudKit upload
-        photo.image = image
-        
+        Task {
+            await savePhotoToCommunity(image)
+        }
+    }
+    
+    @MainActor
+    private func savePhotoToCommunity(_ image: UIImage) async {
         do {
+            if usesCommunityBackend {
+                try authService.requireCommunityWriter()
+                guard let spotId = spot.supabaseId.flatMap(UUID.init(uuidString:)),
+                      let userId = authService.userID else {
+                    showError("This spot is not linked to the community catalog yet.")
+                    return
+                }
+                
+                let remote = try await SupabaseUGCService.shared.uploadPhoto(
+                    spotId: spotId,
+                    userId: userId,
+                    image: image
+                )
+                
+                let photo = Photo(context: viewContext)
+                photo.timestamp = Date()
+                photo.spot = spot
+                photo.cloudKitRecordID = ""
+                photo.supabaseId = remote.id.uuidString
+                photo.photoAsset = remote.storagePath
+                photo.imageData = image.jpegData(compressionQuality: 0.85)
+            } else {
+                let photo = Photo(context: viewContext)
+                photo.timestamp = Date()
+                photo.spot = spot
+                photo.cloudKitRecordID = ""
+                photo.image = image
+            }
+            
             try viewContext.save()
             logger.info("Successfully saved photo for \(spot.name)")
         } catch {
@@ -974,7 +1068,6 @@ struct SpotDetailView: View {
     private func photoThumbnailView(photo: Photo) -> some View {
         Group {
             if let photoAsset = photo.photoAsset, !photoAsset.isEmpty {
-                // CloudKit asset
                 if let image = loadedImages[photoAsset] {
                     Image(uiImage: image)
                         .resizable()
@@ -994,7 +1087,6 @@ struct SpotDetailView: View {
                         )
                         .accessibilityLabel("Loading photo")
                 } else {
-                    // Load CloudKit asset
                     RoundedRectangle(cornerRadius: 8)
                         .fill(ThemeManager.SwiftUIColors.latte)
                         .frame(width: 120, height: 120)
@@ -1004,7 +1096,11 @@ struct SpotDetailView: View {
                                 .font(.title2)
                         )
                         .onAppear {
-                            loadCloudKitImage(photo: photo, assetID: photoAsset)
+                            if isCommunityStoragePath(photoAsset) {
+                                loadCommunityPhoto(photo: photo, storagePath: photoAsset)
+                            } else {
+                                loadCloudKitImage(photo: photo, assetID: photoAsset)
+                            }
                         }
                         .accessibilityLabel("Photo taken on \(photo.formattedTimestamp)")
                 }
@@ -1028,6 +1124,74 @@ struct SpotDetailView: View {
                             .font(.title2)
                     )
                     .accessibilityLabel("Photo taken on \(photo.formattedTimestamp)")
+            }
+        }
+    }
+    
+    private var communitySignInFeatureTitle: String {
+        switch pendingCommunityAction {
+        case .addRating:
+            return "rate this spot"
+        case .uploadPhoto:
+            return "upload photos"
+        case .submitTip:
+            return "share tips"
+        case .none:
+            return "contribute"
+        }
+    }
+    
+    private func promptForCommunityWriteIfNeeded(
+        _ action: PendingCommunityAction,
+        perform: @escaping () -> Void
+    ) {
+        guard usesCommunityBackend, !authService.canWriteCommunityContent else {
+            perform()
+            return
+        }
+        pendingCommunityAction = action
+        showingCommunitySignIn = true
+    }
+    
+    private func resumePendingCommunityAction() {
+        guard let action = pendingCommunityAction else { return }
+        pendingCommunityAction = nil
+        
+        switch action {
+        case .addRating:
+            showingRatingForm = true
+        case .uploadPhoto:
+            showingImagePicker = true
+        case .submitTip:
+            Task { await submitTip() }
+        }
+    }
+    
+    private func isCommunityStoragePath(_ path: String) -> Bool {
+        path.contains("/")
+    }
+    
+    private func loadCommunityPhoto(photo: Photo, storagePath: String) {
+        guard !loadingImages.contains(storagePath) else { return }
+        loadingImages.insert(storagePath)
+        
+        Task {
+            defer {
+                Task { @MainActor in
+                    loadingImages.remove(storagePath)
+                }
+            }
+            
+            do {
+                let url = try SupabaseUGCService.shared.publicPhotoURL(storagePath: storagePath)
+                let (data, _) = try await URLSession.shared.data(from: url)
+                if let image = UIImage(data: data) {
+                    await MainActor.run {
+                        loadedImages[storagePath] = image
+                    }
+                }
+            } catch {
+                logger.warning("Failed to load community photo: \(error.localizedDescription)")
             }
         }
     }
@@ -1140,20 +1304,40 @@ struct SpotDetailView: View {
         .accessibilityLabel("User tip: \(tip.text), \(tip.likesDislikesString), thumbs up button, thumbs down button")
     }
     
-    private func submitTip() {
+    @MainActor
+    private func submitTip() async {
         let trimmedText = newTipText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedText.isEmpty else { return }
         
         do {
-            let userTip = UserTip.create(text: trimmedText, spot: spot, in: viewContext)
-            spot.addToUserTips(userTip)
+            if usesCommunityBackend {
+                try authService.requireCommunityWriter()
+                guard let spotId = spot.supabaseId.flatMap(UUID.init(uuidString:)),
+                      let userId = authService.userID else {
+                    showError("This spot is not linked to the community catalog yet.")
+                    return
+                }
+                
+                let remote = try await SupabaseUGCService.shared.insertTip(
+                    spotId: spotId,
+                    userId: userId,
+                    text: trimmedText
+                )
+                
+                let userTip = UserTip(context: viewContext)
+                userTip.text = trimmedText
+                userTip.timestamp = remote.createdAt ?? Date()
+                userTip.supabaseId = remote.id.uuidString
+                userTip.cloudKitRecordID = ""
+                userTip.spot = spot
+            } else {
+                let userTip = UserTip.create(text: trimmedText, spot: spot, in: viewContext)
+                spot.addToUserTips(userTip)
+            }
             
             try viewContext.save()
             logger.info("Successfully submitted tip: \(trimmedText)")
-            
-            // Clear the text field
             newTipText = ""
-            
         } catch {
             logger.error("Failed to submit tip: \(error.localizedDescription)")
             showError("Failed to submit tip: \(error.localizedDescription)")

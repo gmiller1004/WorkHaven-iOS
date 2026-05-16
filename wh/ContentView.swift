@@ -53,7 +53,7 @@ struct ContentView: View {
     var body: some View {
         TabView {
             // MARK: - List Tab
-            SpotListView()
+            SpotListView(spotViewModel: spotViewModel)
                 .environment(\.managedObjectContext, viewContext)
                 .tabItem {
                     Label("List", systemImage: "list.bullet")
@@ -101,11 +101,8 @@ struct ContentView: View {
         .onChange(of: locationService.currentLocation) { newLocation in
             if let location = newLocation {
                 logger.info("Location updated: \(location.coordinate.latitude), \(location.coordinate.longitude)")
-                // Clear spots from previous location to prevent mixing
-                spotViewModel.clearSpotsForLocationChange()
-                // Load spots with the new location
                 Task {
-                    await spotViewModel.loadSpots(near: location)
+                    await spotViewModel.handleLocationUpdate(location)
                 }
             }
         }

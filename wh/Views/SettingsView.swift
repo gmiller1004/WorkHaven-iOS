@@ -27,8 +27,10 @@ struct SettingsView: View {
     @StateObject private var locationService = LocationService.shared
     @StateObject private var spotViewModel = SpotViewModel()
     @StateObject private var notificationManager = NotificationManager.shared
+    @ObservedObject private var authService = SupabaseAuthService.shared
     
     @State private var showingResetAlert = false
+    @State private var showingCommunitySignIn = false
     @State private var isResettingData = false
     @State private var showingError = false
     @State private var errorMessage = ""
@@ -115,6 +117,13 @@ struct SettingsView: View {
             .onAppear {
                 initializeDistanceUnits()
             }
+            .sheet(isPresented: $showingCommunitySignIn) {
+                CommunitySignInSheet(
+                    featureTitle: "post reviews, photos, and tips",
+                    onSignedIn: { showingCommunitySignIn = false },
+                    onCancel: { showingCommunitySignIn = false }
+                )
+            }
         }
         .navigationViewStyle(StackNavigationViewStyle())
     }
@@ -132,6 +141,10 @@ struct SettingsView: View {
                 
                 // Notifications Section
                 notificationsSection
+                
+                if AppConfig.isSupabaseConfigured {
+                    communityAccountSection
+                }
                 
                 // Manual Actions Section
                 manualActionsSection
@@ -359,6 +372,47 @@ struct SettingsView: View {
             Spacer()
         }
         .padding(.horizontal, ThemeManager.Spacing.md)
+    }
+    
+    // MARK: - Community Account
+    
+    private var communityAccountSection: some View {
+        VStack(alignment: .leading, spacing: ThemeManager.Spacing.md) {
+            Text("Community Account")
+                .font(ThemeManager.SwiftUIFonts.headline)
+                .foregroundColor(ThemeManager.SwiftUIColors.mocha)
+            
+            VStack(alignment: .leading, spacing: ThemeManager.Spacing.sm) {
+                if authService.canWriteCommunityContent {
+                    Text("Signed in with Apple — you can post reviews, photos, and tips.")
+                        .font(ThemeManager.SwiftUIFonts.caption)
+                        .foregroundColor(ThemeManager.SwiftUIColors.mocha.opacity(0.8))
+                    
+                    Button("Sign Out") {
+                        Task { await authService.signOutToAnonymous() }
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(ThemeManager.SwiftUIColors.mocha)
+                } else {
+                    Text("Sign in with Apple to share reviews, photos, and tips with the community.")
+                        .font(ThemeManager.SwiftUIFonts.caption)
+                        .foregroundColor(ThemeManager.SwiftUIColors.mocha.opacity(0.8))
+                    
+                    Button("Sign in with Apple") {
+                        showingCommunitySignIn = true
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(ThemeManager.SwiftUIColors.coral)
+                }
+            }
+            .padding(ThemeManager.Spacing.md)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: ThemeManager.CornerRadius.medium)
+                    .fill(Color.white)
+                    .shadow(color: ThemeManager.SwiftUIColors.mocha.opacity(0.1), radius: 2, x: 0, y: 1)
+            )
+        }
     }
     
     // MARK: - Manual Actions Section

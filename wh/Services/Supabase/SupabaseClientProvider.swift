@@ -33,7 +33,16 @@ final class SupabaseClientProvider {
             return
         }
         
-        client = SupabaseClient(supabaseURL: url, supabaseKey: anonKey)
+        let decoder = SupabaseJSON.makeDecoder()
+        client = SupabaseClient(
+            supabaseURL: url,
+            supabaseKey: anonKey,
+            options: SupabaseClientOptions(
+                db: .init(decoder: decoder),
+                auth: .init(emitLocalSessionAsInitialSession: true),
+                functions: .init(decoder: decoder)
+            )
+        )
         logger.info("Supabase client configured")
     }
     

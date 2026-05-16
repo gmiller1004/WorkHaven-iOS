@@ -37,9 +37,14 @@ class PersistenceController {
         description.setOption(true as NSNumber, forKey: NSPersistentHistoryTrackingKey)
         description.setOption(true as NSNumber, forKey: NSPersistentStoreRemoteChangeNotificationPostOptionKey)
         
-        // CloudKit container identifier
+        // CloudKit on device; local-only Core Data in Simulator (no iCloud account).
+        #if targetEnvironment(simulator)
+        description.cloudKitContainerOptions = nil
+        logger.info("Simulator: Core Data local only (CloudKit sync disabled)")
+        #else
         let cloudKitOptions = NSPersistentCloudKitContainerOptions(containerIdentifier: "iCloud.com.nextsizzle.wh")
         description.cloudKitContainerOptions = cloudKitOptions
+        #endif
         
         // Async loading
         container.loadPersistentStores { [weak self] storeDescription, error in
@@ -75,7 +80,7 @@ class PersistenceController {
             object: container.persistentStoreCoordinator,
             queue: .main
         ) { [weak self] _ in
-            self?.logger.info("Remote change notification received")
+            self?.logger.debug("Remote change notification received")
             // Handle remote changes if needed
             // You can post additional notifications here for UI updates
         }

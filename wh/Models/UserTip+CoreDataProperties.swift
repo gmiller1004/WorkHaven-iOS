@@ -35,6 +35,9 @@ extension UserTip {
     /// CloudKit record identifier for synchronization
     @NSManaged public var cloudKitRecordID: String
     
+    /// Supabase `spot_tips.id` when synced from community backend
+    @NSManaged public var supabaseId: String?
+    
     /// The spot this tip belongs to (many-to-one relationship)
     @NSManaged public var spot: Spot?
 

@@ -112,6 +112,11 @@ struct MapView: View {
                     mapRegion = newRegion
                 }
             }
+            .onChange(of: spotViewModel.spots.count) { _ in
+                if let region = spotViewModel.currentMapRegion {
+                    mapRegion = region
+                }
+            }
             .onMapCameraChange { context in
                 mapRegion = context.region
                 spotViewModel.refreshAnnotations(mapRegion: context.region)

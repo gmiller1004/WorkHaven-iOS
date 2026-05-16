@@ -36,14 +36,6 @@ struct RemoteSpot: Codable, Sendable {
     let outlets: Bool
     let tips: String
     let enrichedAt: Date?
-    
-    enum CodingKeys: String, CodingKey {
-        case id, name, address, latitude, longitude, type, tips
-        case wifiRating = "wifi_rating"
-        case noiseRating = "noise_rating"
-        case outlets
-        case enrichedAt = "enriched_at"
-    }
 }
 
 struct DiscoverEnrichRequest: Encodable, Sendable {
@@ -98,16 +90,19 @@ final class SupabaseCommunityService {
     func discoverAndEnrich(locations: [DiscoverLocationPayload]) async throws -> [RemoteSpot] {
         let client = try SupabaseClientProvider.shared.requireClient()
         
-        let response: DiscoverEnrichResponse = try await client.functions
-            .invoke(
+        do {
+            let response: DiscoverEnrichResponse = try await client.functions.invoke(
                 "discover-enrich",
                 options: FunctionInvokeOptions(
                     body: DiscoverEnrichRequest(locations: locations)
                 )
             )
-        
-        logger.info("discover-enrich returned \(response.spots.count) spots")
-        return response.spots
+            logger.info("discover-enrich returned \(response.spots.count) spots")
+            return response.spots
+        } catch {
+            logger.error("discover-enrich decode failed: \(error.localizedDescription)")
+            throw error
+        }
     }
     
     /// Merges remote spots into Core Data; returns local `Spot` entities for the UI.

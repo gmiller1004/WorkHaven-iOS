@@ -15,6 +15,12 @@
 		Copyright © 2024 WorkHaven. All rights reserved.
 	-->
 	
+	<!-- Sign in with Apple for community UGC -->
+	<key>com.apple.developer.applesignin</key>
+	<array>
+		<string>Default</string>
+	</array>
+	
 	<!-- Universal Links support for deep linking and sharing -->
 	<key>com.apple.developer.associated-domains</key>
 	<array>

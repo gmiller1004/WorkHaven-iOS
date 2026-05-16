@@ -5,8 +5,13 @@ Community backend for canonical spots, shared reviews/photos, and server-side Gr
 ## Setup
 
 1. **Dashboard → Authentication → Providers**
-   - Enable **Anonymous sign-ins**
-   - Enable **Apple** (for posting reviews/photos)
+   - Enable **Anonymous sign-ins** (read spots and community UGC)
+   - Enable **Apple** (for posting reviews/photos/tips)
+   - Under Apple: add your app's **Services ID**, **Key ID**, **Team ID**, and `.p8` key from Apple Developer
+   - Enable **Automatic linking** of anonymous users to Apple sign-in (so the same device keeps its session when upgrading from anonymous)
+
+2. **Xcode**
+   - Target → Signing & Capabilities → **Sign in with Apple** (entitlement is in `wh/wh.entitlements`)
 
 2. **Secrets** (Dashboard → Edge Functions → Secrets, or CLI):
    ```bash

@@ -20,7 +20,7 @@ struct SpotListView: View {
     
     // MARK: - Properties
     
-    @StateObject private var spotViewModel = SpotViewModel()
+    @ObservedObject var spotViewModel: SpotViewModel
     @ObservedObject private var locationService = LocationService.shared
     @AppStorage("usesImperialUnits") private var usesImperialUnits: Bool = true
     @State private var showingError = false
@@ -94,12 +94,8 @@ struct SpotListView: View {
     
     // MARK: - Initialization
     
-    /**
-     * Initializes SpotListView with @StateObject SpotViewModel
-     * Uses @StateObject for local state management
-     */
-    init() {
-        // @StateObject is initialized automatically
+    init(spotViewModel: SpotViewModel) {
+        self.spotViewModel = spotViewModel
     }
     
     // MARK: - Body
@@ -177,15 +173,6 @@ struct SpotListView: View {
                     .foregroundColor(ThemeManager.SwiftUIColors.mocha)
             }
             .background(ThemeManager.SwiftUIColors.latte)
-            .onAppear {
-                loadSpotsIfNeeded()
-            }
-            .onChange(of: locationService.currentLocation) { location in
-                if location != nil {
-                    logger.info("Location became available in SpotListView, loading spots")
-                    loadSpotsIfNeeded()
-                }
-            }
             .onChange(of: spotViewModel.errorMessage) { errorMessage in
                 if errorMessage != nil {
                     showingError = true
@@ -427,7 +414,7 @@ struct SpotListView: View {
         Task {
             await spotViewModel.loadSpots(near: location)
         }
-        logger.info("SpotListView onAppear - loading spots with @StateObject SpotViewModel")
+        logger.info("SpotListView loading spots with shared SpotViewModel")
     }
     
     /**
@@ -868,6 +855,6 @@ struct SteamLine: View {
 // MARK: - Preview
 
 #Preview {
-    SpotListView()
+    SpotListView(spotViewModel: SpotViewModel())
         .environment(\.managedObjectContext, PersistenceController.preview.container.viewContext)
 }

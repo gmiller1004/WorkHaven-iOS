@@ -32,6 +32,9 @@ extension UserRating {
     /// User's tips and additional notes about the spot
     @NSManaged public var tip: String
     
+    /// Supabase `spot_reviews.id` when synced from community backend
+    @NSManaged public var supabaseId: String?
+    
     /// Many-to-one relationship to the associated Spot
     @NSManaged public var spot: Spot?
 

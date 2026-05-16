@@ -54,7 +54,6 @@ class LocationService: NSObject, ObservableObject {
     override init() {
         super.init()
         setupLocationManager()
-        updateAuthorizationStatus()
     }
     
     // MARK: - Setup
@@ -87,25 +86,7 @@ class LocationService: NSObject, ObservableObject {
         logger.info("Requesting when-in-use location permission")
         
         return await withCheckedContinuation { continuation in
-            // Check current status first
-            let currentStatus = locationManager.authorizationStatus
-            if currentStatus == .authorizedWhenInUse || currentStatus == .authorizedAlways {
-                logger.info("Location permission already granted")
-                continuation.resume(returning: true)
-                return
-            }
-            
-            if currentStatus == .denied || currentStatus == .restricted {
-                logger.warning("Location permission denied or restricted")
-                self.errorMessage = "Location access denied"
-                continuation.resume(returning: false)
-                return
-            }
-            
-            // Store continuation for delegate callback
             self.pendingPermissionContinuation = continuation
-            
-            // Request permission
             locationManager.requestWhenInUseAuthorization()
         }
     }
@@ -118,25 +99,7 @@ class LocationService: NSObject, ObservableObject {
         logger.info("Requesting always location permission for geofencing")
         
         return await withCheckedContinuation { continuation in
-            // Check current status first
-            let currentStatus = locationManager.authorizationStatus
-            if currentStatus == .authorizedAlways {
-                logger.info("Always location permission already granted")
-                continuation.resume(returning: true)
-                return
-            }
-            
-            if currentStatus == .denied || currentStatus == .restricted {
-                logger.warning("Location permission denied or restricted")
-                self.errorMessage = "Location access denied"
-                continuation.resume(returning: false)
-                return
-            }
-            
-            // Store continuation for delegate callback
             self.pendingPermissionContinuation = continuation
-            
-            // Request permission
             locationManager.requestAlwaysAuthorization()
         }
     }
@@ -244,10 +207,10 @@ class LocationService: NSObject, ObservableObject {
      * Sets isAuthorized based on status (.authorizedWhenInUse or .authorizedAlways)
      * Calls startUpdatingLocation() after any permission grant
      */
-    private func updateAuthorizationStatus() {
-        authorizationStatus = locationManager.authorizationStatus
+    private func updateAuthorizationStatus(_ status: CLAuthorizationStatus) {
+        authorizationStatus = status
         
-        switch authorizationStatus {
+        switch status {
         case .authorizedWhenInUse, .authorizedAlways:
             isAuthorized = true
             errorMessage = nil // Clear any previous error messages
@@ -313,7 +276,7 @@ extension LocationService: @preconcurrency CLLocationManagerDelegate {
             self.logger.info("Location authorization changed to: \(status.rawValue)")
             
             // Update authorization status and published properties
-            self.updateAuthorizationStatus()
+            self.updateAuthorizationStatus(status)
             
             // Handle permission request result
             if self.pendingPermissionContinuation != nil {

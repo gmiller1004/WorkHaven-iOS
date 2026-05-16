@@ -32,6 +32,9 @@ extension Photo {
     /// CloudKit record identifier for synchronization
     @NSManaged public var cloudKitRecordID: String
     
+    /// Supabase `spot_photos.id` when synced from community backend
+    @NSManaged public var supabaseId: String?
+    
     /// Number of likes for this photo
     @NSManaged public var likes: Int16
     

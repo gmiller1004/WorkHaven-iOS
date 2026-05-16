@@ -91,8 +91,11 @@ class SpotDiscoveryService: ObservableObject {
             await updateDiscoveryState(isDiscovering: false, progress: "Discovery complete")
             logger.info("Successfully discovered \(discoveredSpots.count) total spots")
             
-            // Log CloudKit sync event
-            logger.info("CloudKit sync triggered for \(discoveredSpots.count) spots")
+            if AppConfig.isSupabaseConfigured {
+                logger.info("Community discovery complete (\(discoveredSpots.count) spots)")
+            } else {
+                logger.info("CloudKit sync triggered for \(discoveredSpots.count) spots")
+            }
             
             return discoveredSpots
             
@@ -184,6 +187,7 @@ class SpotDiscoveryService: ObservableObject {
         var allMapItems: [(MKMapItem, String)] = [] // Store map item with its category
         var newSpotsCount = 0
         var staleSpotsCount = 0
+        var communitySeedCount = 0
         
         // Search each category
         for (index, category) in searchCategories.enumerated() {
@@ -194,12 +198,19 @@ class SpotDiscoveryService: ObservableObject {
             // Process each map item
             for mapItem in mapItems {
                 if let matchingSpot = findMatchingSpot(mapItem: mapItem) {
-                    // Check if spot is stale (lastSeeded > 7 days ago)
                     let sevenDaysAgo = Calendar.current.date(byAdding: .day, value: -7, to: Date()) ?? Date()
-                    if matchingSpot.lastSeeded < sevenDaysAgo {
+                    let isStale = matchingSpot.lastSeeded < sevenDaysAgo
+                    let needsCommunityLink = AppConfig.isSupabaseConfigured
+                        && (matchingSpot.supabaseId == nil || matchingSpot.supabaseId?.isEmpty == true)
+                    
+                    if isStale {
                         logger.info("Found stale spot: \(mapItem.name ?? "Unknown") - will update")
                         allMapItems.append((mapItem, category))
                         staleSpotsCount += 1
+                    } else if needsCommunityLink {
+                        logger.info("Found local spot missing community link: \(mapItem.name ?? "Unknown") - will seed Supabase")
+                        allMapItems.append((mapItem, category))
+                        communitySeedCount += 1
                     } else {
                         logger.info("Found fresh spot: \(mapItem.name ?? "Unknown") - skipping")
                     }
@@ -214,7 +225,7 @@ class SpotDiscoveryService: ObservableObject {
             try await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
         }
         
-        logger.info("Found \(allMapItems.count) spots to process (new: \(newSpotsCount), stale: \(staleSpotsCount))")
+        logger.info("Found \(allMapItems.count) spots to process (new: \(newSpotsCount), stale: \(staleSpotsCount), community seed: \(communitySeedCount))")
         
         // If no new or stale spots found, return existing spots
         if allMapItems.isEmpty {
@@ -296,8 +307,25 @@ class SpotDiscoveryService: ObservableObject {
             )
         }
         
-        let remoteSpots = try await SupabaseCommunityService.shared.discoverAndEnrich(locations: payloads)
-        return try SupabaseCommunityService.shared.syncToCoreData(remoteSpots: remoteSpots)
+        // Smaller batches avoid edge function timeouts and large JSON payloads.
+        let batchSize = 8
+        var allRemoteSpots: [RemoteSpot] = []
+        
+        for batchStart in stride(from: 0, to: payloads.count, by: batchSize) {
+            let batchEnd = min(batchStart + batchSize, payloads.count)
+            let batch = Array(payloads[batchStart..<batchEnd])
+            let batchIndex = batchStart / batchSize + 1
+            let totalBatches = Int(ceil(Double(payloads.count) / Double(batchSize)))
+            
+            await updateDiscoveryState(
+                progress: "Enriching community spots (\(batchIndex)/\(totalBatches))..."
+            )
+            
+            let remoteBatch = try await SupabaseCommunityService.shared.discoverAndEnrich(locations: batch)
+            allRemoteSpots.append(contentsOf: remoteBatch)
+        }
+        
+        return try SupabaseCommunityService.shared.syncToCoreData(remoteSpots: allRemoteSpots)
     }
     
     private func mergeDiscoveredSpots(existing: [Spot], enriched: [Spot]) -> [Spot] {
@@ -867,8 +895,11 @@ class SpotDiscoveryService: ObservableObject {
                 try context.save()
                 logger.info("Saved \(spots.count) spots to Core Data")
                 
-                // Trigger CloudKit sync
-                logger.info("CloudKit sync triggered for \(spots.count) spots")
+                if AppConfig.isSupabaseConfigured {
+                    logger.info("Community spots persisted locally (\(spots.count))")
+                } else {
+                    logger.info("CloudKit sync triggered for \(spots.count) spots")
+                }
             }
         } catch {
             logger.error("Failed to save spots to Core Data: \(error.localizedDescription)")
@@ -894,7 +925,14 @@ class SpotDiscoveryService: ObservableObject {
             let sortedSpots = allSpots.sorted { $0.lastSeeded > $1.lastSeeded }
             
             for spot in sortedSpots {
-                let compositeKey = "\(spot.name.lowercased().trimmingCharacters(in: .whitespacesAndNewlines))|\(spot.address.lowercased().trimmingCharacters(in: .whitespacesAndNewlines))"
+                let compositeKey: String
+                if let supabaseId = spot.supabaseId, !supabaseId.isEmpty {
+                    compositeKey = "supabase:\(supabaseId)"
+                } else {
+                    let name = spot.name.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+                    let address = spot.address.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+                    compositeKey = "local:\(name)|\(address)"
+                }
                 
                 if seenKeys.contains(compositeKey) {
                     // This is a duplicate, mark for deletion
@@ -919,9 +957,20 @@ class SpotDiscoveryService: ObservableObject {
                     let processedLocation = CLLocation(latitude: processedSpot.latitude, longitude: processedSpot.longitude)
                     let distance = spotLocation.distance(from: processedLocation)
                     
-                    if distance < 50.0 { // Within 50 meters
+                    guard distance < 100.0 else { continue }
+                    
+                    let spotId = spot.supabaseId ?? ""
+                    let processedId = processedSpot.supabaseId ?? ""
+                    if !spotId.isEmpty && !processedId.isEmpty && spotId != processedId {
+                        // Different canonical community spots at the same building — keep both
+                        continue
+                    }
+                    
+                    let sameName = spot.name.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+                        == processedSpot.name.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+                    if sameName || (!spotId.isEmpty && spotId == processedId) {
                         proximityDuplicates.append(spot)
-                        logger.info("Marking proximity duplicate for deletion: \(spot.name) at \(spot.address) (distance: \(distance)m from \(processedSpot.name))")
+                        logger.info("Marking proximity duplicate for deletion: \(spot.name) at \(spot.address) (distance: \(Int(distance))m from \(processedSpot.name))")
                         isProximityDuplicate = true
                         break
                     }

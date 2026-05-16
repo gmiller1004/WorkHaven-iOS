@@ -65,6 +65,12 @@ class SpotViewModel: ObservableObject {
     private var cachedSpots: [Spot] = []
     private var lastCacheUpdate: Date?
     
+    /// Last location used for a successful spot load (ignores minor GPS drift).
+    private var lastLoadedLocation: CLLocation?
+    
+    /// Minimum movement before clearing spots and reloading (meters).
+    private let significantLocationChangeMeters: CLLocationDistance = 500
+    
     // MARK: - Initialization
     
     /**
@@ -85,6 +91,16 @@ class SpotViewModel: ObservableObject {
      * - Parameter near: The center point for spot discovery, or nil to load all spots
      */
     func loadSpots(near: CLLocation?) async {
+        if isSeeding {
+            logger.info("Spot load already in progress, skipping duplicate request")
+            return
+        }
+        
+        // Claim the load immediately so concurrent callers don't duplicate Supabase/discovery work.
+        isSeeding = true
+        errorMessage = nil
+        showEmptyState = false
+        
         logger.info("Loading spots near \(near?.coordinate.latitude ?? 0.0), \(near?.coordinate.longitude ?? 0.0)")
         
         // Remove duplicates before loading spots
@@ -93,20 +109,27 @@ class SpotViewModel: ObservableObject {
         // Debug: Check total spots in database
         debugSpotCount()
         
-        // Clear any previous errors and reset empty state
-        errorMessage = nil
-        isSeeding = true
-        showEmptyState = false
-        
         do {
             var existingSpots = try await fetchExistingSpots(near: near)
+            var remoteCommunityCount = 0
             
             if AppConfig.isSupabaseConfigured, let location = near {
-                existingSpots = await loadCommunitySpotsIfAvailable(near: location, existing: existingSpots)
+                let communityResult = await loadCommunitySpotsIfAvailable(near: location, existing: existingSpots)
+                existingSpots = communityResult.spots
+                remoteCommunityCount = communityResult.remoteCount
+                
+                if remoteCommunityCount > 0 {
+                    await spotDiscoveryService.removeDuplicateSpots()
+                    existingSpots = try await fetchExistingSpots(near: location)
+                }
             }
             
             // Check if we need to refresh spots
-            let needsRefresh = shouldRefreshSpots(existingSpots)
+            var needsRefresh = shouldRefreshSpots(existingSpots)
+            if AppConfig.isSupabaseConfigured && remoteCommunityCount == 0 {
+                logger.info("Community catalog is empty for this area — seeding Supabase via discovery")
+                needsRefresh = true
+            }
             
             if needsRefresh {
                 logger.info("Spots need refresh or no spots found, discovering new spots")
@@ -114,6 +137,7 @@ class SpotViewModel: ObservableObject {
                 await discoverNewSpots(near: discoveryLocation)
             } else {
                 logger.info("Using existing spots (\(existingSpots.count) found)")
+                existingSpots = uniqueSpotsForDisplay(existingSpots)
                 // Refresh ratings for existing spots
                 await refreshRatings(for: existingSpots)
                 
@@ -121,22 +145,7 @@ class SpotViewModel: ObservableObject {
                 let viewContext = PersistenceController.shared.container.viewContext
                 viewContext.refreshAllObjects()
                 
-                await MainActor.run {
-                    // Filter spots by selected categories
-                    let filteredSpots = filterSpotsByCategory(existingSpots)
-                    self.spots = self.sortSpots(filteredSpots, from: near)
-                    self.isSeeding = false
-                    self.showEmptyState = self.spots.isEmpty
-                    
-                    // Update map region to center on the location used for loading spots
-                    if let location = near {
-                        self.currentMapRegion = MKCoordinateRegion(
-                            center: location.coordinate,
-                            span: MKCoordinateSpan(latitudeDelta: 0.05, longitudeDelta: 0.05)
-                        )
-                        logger.info("Updated map region to center on \(location.coordinate.latitude), \(location.coordinate.longitude)")
-                    }
-                }
+                await finishLoadingSpots(existingSpots, near: near)
             }
             
         } catch {
@@ -167,6 +176,32 @@ class SpotViewModel: ObservableObject {
     }
     
     /**
+     * Handles location updates; only reloads when the user has moved a meaningful distance.
+     */
+    func handleLocationUpdate(_ location: CLLocation) async {
+        if let lastLoadedLocation {
+            let movedMeters = location.distance(from: lastLoadedLocation)
+            if movedMeters < significantLocationChangeMeters {
+                logger.info(
+                    "Location change insignificant (\(Int(movedMeters))m), keeping \(self.spots.count) loaded spots"
+                )
+                return
+            }
+            logger.info("Significant location change (\(Int(movedMeters))m), reloading spots")
+        } else if isSeeding {
+            return
+        } else if !spots.isEmpty {
+            noteSuccessfulLoad(at: location)
+            return
+        }
+        
+        if !spots.isEmpty {
+            clearSpotsForLocationChange()
+        }
+        await loadSpots(near: location)
+    }
+    
+    /**
      * Clears spots when location changes to prevent mixing spots from different locations
      */
     func clearSpotsForLocationChange() {
@@ -174,6 +209,58 @@ class SpotViewModel: ObservableObject {
         cachedSpots = []
         lastCacheUpdate = nil
         logger.info("Cleared spots for location change")
+    }
+    
+    private func noteSuccessfulLoad(at location: CLLocation?) {
+        lastLoadedLocation = location
+    }
+    
+    /**
+     * Applies loaded spots to the UI and records the load location.
+     */
+    private func finishLoadingSpots(_ existingSpots: [Spot], near: CLLocation?) async {
+        let displaySpots = uniqueSpotsForDisplay(existingSpots)
+        
+        await MainActor.run {
+            let filteredSpots = filterSpotsByCategory(displaySpots)
+            self.spots = self.sortSpots(filteredSpots, from: near)
+            self.isSeeding = false
+            self.showEmptyState = self.spots.isEmpty
+            
+            if let location = near {
+                self.currentMapRegion = MKCoordinateRegion(
+                    center: location.coordinate,
+                    span: MKCoordinateSpan(latitudeDelta: 0.05, longitudeDelta: 0.05)
+                )
+                logger.info("Updated map region to center on \(location.coordinate.latitude), \(location.coordinate.longitude)")
+            }
+        }
+        
+        noteSuccessfulLoad(at: near)
+        await scheduleNotificationsForHighRatedSpots(spots)
+        logger.info("Successfully loaded \(self.spots.count) spots")
+    }
+    
+    /// Collapses duplicate Core Data rows (same community id) before display or rating refresh.
+    private func uniqueSpotsForDisplay(_ spots: [Spot]) -> [Spot] {
+        var bySupabaseId: [String: Spot] = [:]
+        var withoutCommunityId: [Spot] = []
+        
+        for spot in spots {
+            guard let id = spot.supabaseId, !id.isEmpty else {
+                withoutCommunityId.append(spot)
+                continue
+            }
+            if let existing = bySupabaseId[id] {
+                if spot.lastSeeded > existing.lastSeeded {
+                    bySupabaseId[id] = spot
+                }
+            } else {
+                bySupabaseId[id] = spot
+            }
+        }
+        
+        return Array(bySupabaseId.values) + withoutCommunityId
     }
     
     /**
@@ -487,17 +574,28 @@ class SpotViewModel: ObservableObject {
     /**
      * Loads canonical community spots from Supabase into Core Data when available.
      */
-    private func loadCommunitySpotsIfAvailable(near location: CLLocation, existing: [Spot]) async -> [Spot] {
+    private struct CommunityLoadResult {
+        let spots: [Spot]
+        let remoteCount: Int
+    }
+    
+    private func loadCommunitySpotsIfAvailable(near location: CLLocation, existing: [Spot]) async -> CommunityLoadResult {
         do {
-            let remoteSpots = try await SupabaseCommunityService.shared.fetchNearbySpots(near: location, radiusMeters: searchRadius)
-            guard !remoteSpots.isEmpty else { return existing }
+            let remoteSpots = try await SupabaseCommunityService.shared.fetchNearbySpots(
+                near: location,
+                radiusMeters: searchRadius
+            )
+            
+            guard !remoteSpots.isEmpty else {
+                return CommunityLoadResult(spots: existing, remoteCount: 0)
+            }
             
             let synced = try SupabaseCommunityService.shared.syncToCoreData(remoteSpots: remoteSpots)
             logger.info("Synced \(synced.count) community spots from Supabase")
-            return synced
+            return CommunityLoadResult(spots: synced, remoteCount: remoteSpots.count)
         } catch {
             logger.warning("Supabase community fetch failed, using local cache: \(error.localizedDescription)")
-            return existing
+            return CommunityLoadResult(spots: existing, remoteCount: -1)
         }
     }
     
@@ -577,6 +675,8 @@ class SpotViewModel: ObservableObject {
             )
             logger.info("Updated map region to center on discovery location \(near.coordinate.latitude), \(near.coordinate.longitude)")
         }
+        
+        noteSuccessfulLoad(at: near)
         
         // Schedule notifications for high-rated spots if nearby alerts are enabled
         await scheduleNotificationsForHighRatedSpots(sortedSpots)

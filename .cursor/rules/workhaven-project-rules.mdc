@@ -112,7 +112,7 @@ Use MKLocalSearch to find spots (categories: "coffee shop", "library", "park", "
 
 
 
-Enrich with xAI Grok API (model: grok-4-fast-non-reasoning, endpoint: https://api.x.ai/v1/chat/completions, header: Authorization Bearer from ProcessInfo.environment["GROK_API_KEY"]).
+Enrich with xAI Grok API (model: grok-4-1-fast-non-reasoning, endpoint: https://api.x.ai/v1/chat/completions, header: Authorization Bearer from ProcessInfo.environment["GROK_API_KEY"]).
 
 
 
