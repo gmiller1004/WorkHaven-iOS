@@ -99,5 +99,9 @@ Info.plist
 .env.local
 .env.*.local
 
+# Supabase CLI temp
+supabase/.temp/
+supabase/.branches/
+
 # macOS
 .DS_Store

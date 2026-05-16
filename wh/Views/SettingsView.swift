@@ -39,6 +39,9 @@ struct SettingsView: View {
     
     private let logger = Logger(subsystem: "com.nextsizzle.wh", category: "SettingsView")
     
+    private static let privacyPolicyURL = URL(string: "https://nextsizzle.com/appfamily/workhaven/privacy")!
+    private static let termsOfUseURL = URL(string: "https://nextsizzle.com/appfamily/workhaven/terms")!
+    
     // MARK: - Body
     
     var body: some View {
@@ -516,9 +519,7 @@ struct SettingsView: View {
             VStack(spacing: ThemeManager.Spacing.sm) {
                 // Privacy Policy Link
                 Button(action: {
-                    if let url = URL(string: "https://nextsizzle.com/appfamily/workhaven/privacy") {
-                        UIApplication.shared.open(url)
-                    }
+                    UIApplication.shared.open(Self.privacyPolicyURL)
                 }) {
                     HStack {
                         Text("Privacy Policy")
@@ -538,14 +539,12 @@ struct SettingsView: View {
                 Divider()
                     .background(ThemeManager.SwiftUIColors.mocha.opacity(0.2))
                 
-                // Terms of Service Link
+                // Terms of Use Link
                 Button(action: {
-                    if let url = URL(string: "https://nextsizzle.com/appfamily/workhaven/terms") {
-                        UIApplication.shared.open(url)
-                    }
+                    UIApplication.shared.open(Self.termsOfUseURL)
                 }) {
                     HStack {
-                        Text("Terms of Service")
+                        Text("Terms of Use")
                             .font(ThemeManager.SwiftUIFonts.body)
                             .foregroundColor(ThemeManager.SwiftUIColors.coral)
                         
@@ -556,8 +555,8 @@ struct SettingsView: View {
                             .foregroundColor(ThemeManager.SwiftUIColors.coral)
                     }
                 }
-                .accessibilityLabel("Terms of Service")
-                .accessibilityHint("Opens Terms of Service in your default browser")
+                .accessibilityLabel("Terms of Use")
+                .accessibilityHint("Opens Terms of Use in your default browser")
             }
             .padding(ThemeManager.Spacing.md)
             .background(

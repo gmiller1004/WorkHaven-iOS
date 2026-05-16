@@ -224,12 +224,17 @@ class SpotDiscoveryService: ObservableObject {
             return existingSpotsCache
         }
         
-        // Enrich with Grok API and create/update Spot entities
+        // Enrich via Supabase edge function (community) or local Grok fallback
         await updateDiscoveryState(progress: "Enriching locations with AI...")
-        let enrichedSpots = try await enrichAndCreateSpots(from: allMapItems)
+        let enrichedSpots: [Spot]
+        if AppConfig.isSupabaseConfigured {
+            enrichedSpots = try await enrichViaSupabase(from: allMapItems)
+        } else {
+            enrichedSpots = try await enrichAndCreateSpots(from: allMapItems)
+        }
         
         // Combine existing and new/updated spots
-        let allSpots = existingSpotsCache + enrichedSpots
+        let allSpots = mergeDiscoveredSpots(existing: existingSpotsCache, enriched: enrichedSpots)
         logger.info("Total spots after discovery: \(allSpots.count) (existing: \(self.existingSpotsCache.count), new/updated: \(enrichedSpots.count))")
         
         return allSpots
@@ -273,6 +278,45 @@ class SpotDiscoveryService: ObservableObject {
                 continuation.resume(returning: finalResults)
             }
         }
+    }
+    
+    // MARK: - Supabase Community Enrichment
+    
+    /**
+     * Sends new/stale map items to the discover-enrich edge function and syncs results locally.
+     */
+    private func enrichViaSupabase(from mapItems: [(MKMapItem, String)]) async throws -> [Spot] {
+        let payloads = mapItems.map { mapItem, category in
+            DiscoverLocationPayload(
+                name: mapItem.name ?? "Unknown Location",
+                address: mapItem.placemark.title ?? "Unknown Address",
+                latitude: mapItem.placemark.coordinate.latitude,
+                longitude: mapItem.placemark.coordinate.longitude,
+                type: getSpotType(for: category)
+            )
+        }
+        
+        let remoteSpots = try await SupabaseCommunityService.shared.discoverAndEnrich(locations: payloads)
+        return try SupabaseCommunityService.shared.syncToCoreData(remoteSpots: remoteSpots)
+    }
+    
+    private func mergeDiscoveredSpots(existing: [Spot], enriched: [Spot]) -> [Spot] {
+        var merged: [Spot] = []
+        var seenSupabaseIDs = Set<String>()
+        var seenObjectIDs = Set<NSManagedObjectID>()
+        
+        for spot in existing + enriched {
+            if let supabaseId = spot.supabaseId, !supabaseId.isEmpty {
+                guard !seenSupabaseIDs.contains(supabaseId) else { continue }
+                seenSupabaseIDs.insert(supabaseId)
+            } else {
+                guard !seenObjectIDs.contains(spot.objectID) else { continue }
+            }
+            seenObjectIDs.insert(spot.objectID)
+            merged.append(spot)
+        }
+        
+        return merged
     }
     
     // MARK: - Grok API Integration
@@ -420,7 +464,7 @@ class SpotDiscoveryService: ObservableObject {
         """
         
         let requestBody = GrokRequest(
-            model: "grok-4-fast-non-reasoning",
+            model: "grok-4-1-fast-non-reasoning",
             messages: [
                 GrokMessage(role: "user", content: prompt)
             ],
@@ -503,7 +547,7 @@ class SpotDiscoveryService: ObservableObject {
         """
         
         let requestBody = GrokRequest(
-            model: "grok-4-fast-non-reasoning",
+            model: "grok-4-1-fast-non-reasoning",
             messages: [
                 GrokMessage(role: "user", content: prompt)
             ],

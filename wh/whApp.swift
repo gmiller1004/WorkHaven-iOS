@@ -31,6 +31,9 @@ struct WorkHavenApp: App {
         WindowGroup {
             ContentView()
                 .environment(\.managedObjectContext, persistenceController.container.viewContext)
+                .task {
+                    await SupabaseAuthService.shared.ensureAnonymousSession()
+                }
                 .onOpenURL { url in
                     handleUniversalLink(url)
                 }
@@ -106,7 +109,11 @@ extension SpotViewModel {
      */
     func spot(with spotID: String) -> Spot? {
         let request: NSFetchRequest<Spot> = Spot.fetchRequest()
-        request.predicate = NSPredicate(format: "cloudKitRecordID == %@", spotID)
+        request.predicate = NSPredicate(
+            format: "supabaseId == %@ OR cloudKitRecordID == %@",
+            spotID,
+            spotID
+        )
         request.fetchLimit = 1
         
         do {

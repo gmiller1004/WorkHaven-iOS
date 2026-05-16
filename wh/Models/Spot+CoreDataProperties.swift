@@ -56,6 +56,9 @@ extension Spot {
     /// CloudKit record identifier for synchronization
     @NSManaged public var cloudKitRecordID: String
     
+    /// Canonical community spot identifier from Supabase
+    @NSManaged public var supabaseId: String?
+    
     /// Type of work spot (e.g., "coffee shop", "library", "coworking space")
     @NSManaged public var type: String
     

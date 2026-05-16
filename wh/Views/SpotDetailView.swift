@@ -222,7 +222,8 @@ struct SpotDetailView: View {
      */
     private func createShareText() -> String {
         // Create Universal Link using the specified format
-        let universalLink = "https://nextsizzle.com/spot/\(spot.cloudKitRecordID.isEmpty ? "unknown" : spot.cloudKitRecordID)"
+        let spotID = spot.supabaseId ?? (spot.cloudKitRecordID.isEmpty ? "unknown" : spot.cloudKitRecordID)
+        let universalLink = "https://nextsizzle.com/spot/\(spotID)"
         
         // Format the share text exactly as specified
         let shareText = "\(spot.name) - \(distanceString) - \(spot.tips) - Discover your perfect work spot with WorkHaven! \(universalLink) #WorkHaven"

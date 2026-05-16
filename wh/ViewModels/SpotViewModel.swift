@@ -99,7 +99,11 @@ class SpotViewModel: ObservableObject {
         showEmptyState = false
         
         do {
-            let existingSpots = try await fetchExistingSpots(near: near)
+            var existingSpots = try await fetchExistingSpots(near: near)
+            
+            if AppConfig.isSupabaseConfigured, let location = near {
+                existingSpots = await loadCommunitySpotsIfAvailable(near: location, existing: existingSpots)
+            }
             
             // Check if we need to refresh spots
             let needsRefresh = shouldRefreshSpots(existingSpots)
@@ -478,6 +482,23 @@ class SpotViewModel: ObservableObject {
         
         logger.info("Deduplicated \(discoveredSpots.count) spots, \(uniqueSpots.count) unique spots remain")
         return uniqueSpots
+    }
+    
+    /**
+     * Loads canonical community spots from Supabase into Core Data when available.
+     */
+    private func loadCommunitySpotsIfAvailable(near location: CLLocation, existing: [Spot]) async -> [Spot] {
+        do {
+            let remoteSpots = try await SupabaseCommunityService.shared.fetchNearbySpots(near: location, radiusMeters: searchRadius)
+            guard !remoteSpots.isEmpty else { return existing }
+            
+            let synced = try SupabaseCommunityService.shared.syncToCoreData(remoteSpots: remoteSpots)
+            logger.info("Synced \(synced.count) community spots from Supabase")
+            return synced
+        } catch {
+            logger.warning("Supabase community fetch failed, using local cache: \(error.localizedDescription)")
+            return existing
+        }
     }
     
     /**
